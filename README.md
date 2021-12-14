@@ -1,14 +1,14 @@
 
-# `SDEpy`: a Python pkg for SDEs
+# `SDElearn`: a Python pkg for SDEs
 
 This package implements functionalities for working with Stochastic Differential Equations models (SDEs for short).
 It includes simulation routines as well as estimation methods based on observed time series. 
 
 Conceptually the information required to describe an SDEs can be divided in three groups: _model_, _sampling_ and _data_.
-The `sdepy` class is the main class of this package, dedicated to the interaction with the user. 
+The `sdelearn` class is the main class of this package, dedicated to the interaction with the user. 
 
-## How to create a `sdepy` class?
-A `sdepy` class is based on three dedicated subclasses, `SdeModel`, `SdeSampling` and `SdeData`, 
+## How to create a `sdelearn` class?
+A `sdelearn` class is based on three dedicated subclasses, `SdeModel`, `SdeSampling` and `SdeData`, 
 containing information about the model, the sampling structure and the observed data respectively. First these three classes 
 must be created:
 
@@ -54,7 +54,7 @@ the terminal value might not be matched exactly and will be replaced by the larg
 The observation times should match the time grid supplied in the sampling information: that is the number of rows in `SdeData.data`
   should be equal to the length of the grid `SDEsampling.grid`.
   
-Finally, an instance of `sdepy` can be created as `Sde(model = SdeModel, sampling=SdeSampling, data=SdeData)`
+Finally, an instance of `sdelearn` can be created as `Sde(model = SdeModel, sampling=SdeSampling, data=SdeData)`
 where the value of each of the three arguments is an instance of the previous classes. The data argument
 is optional. Data can be added later e.g. by simulation or by using the setData `function`. 
 
@@ -98,7 +98,7 @@ accessed by `Sde.model.param`.
 
 A multivariate model.
 
-**Functional mode**. This is the direct way to approach Sde modeling with `sdepy`.
+**Functional mode**. This is the direct way to approach Sde modeling with `sdelearn`.
 Define the drift function:
 
 
