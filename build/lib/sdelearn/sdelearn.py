@@ -1,6 +1,4 @@
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 
 from sde_sampling import SdeSampling as Samp
 from sde_model import SdeModel as Mod

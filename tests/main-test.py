@@ -5,14 +5,14 @@
 
 
 import numpy as np
-from sympy.combinatorics import cyclic
 
 from sdelearn import *
-from sde_data import *
-from sde_sampling import *
-from sde_model import *
-from sde_qmle import*
-from sde_lasso import*
+# from sdelearn.sde_data import *
+# from sdelearn.sde_sampling import *
+# from sdelearn.sde_model import *
+# from sdelearn.sde_learner import *
+# from sdelearn.sde_qmle import*
+# from sdelearn.sde_lasso import*
 import sympy as sym
 
 import matplotlib.pyplot as plt
@@ -80,6 +80,4 @@ if __name__ == '__main__':
     # estimate of covariance
     lasso.vcov
 
-    startp.keys()
-    sde.model.param
 
