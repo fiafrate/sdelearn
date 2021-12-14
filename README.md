@@ -62,7 +62,7 @@ is optional. Data can be added later e.g. by simulation or by using the setData 
 ## Learning model parameters using a `SdeLearner`
 
 The parameters of a SDE can be estimated using an object of class
-`SdeLearner`. Currently available learners are
+`SdeLearner`. Currently available learners are Qmle and Adalasso.
 
 
   
