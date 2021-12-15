@@ -1,14 +1,19 @@
 
-# SDElearn: a Python pkg for SDEs
+# SDElearn: a Python package for SDE modeling
 
 This package implements functionalities for working with Stochastic Differential Equations models (SDEs for short).
 It includes simulation routines as well as estimation methods based on observed time series. 
 
-Conceptually the information required to describe an SDEs can be divided in three groups: _model_, _sampling_ and _data_.
-The `sdelearn` class is the main class of this package, dedicated to the interaction with the user. 
+### Installation
+The `sdelearn` package is available on the TestPyPi repository
+and can be installed by running
+
+    pip install -i https://test.pypi.org/simple/ sdelearn
 
 ## How to create a `sdelearn` class?
-A `sdelearn` class is based on three dedicated subclasses, `SdeModel`, `SdeSampling` and `SdeData`, 
+The `sdelearn` class is the main class containing the information about a SDE.
+Conceptually the information required to describe SDEs can be divided in three groups: _model_, _sampling_ and _data_.
+A `sdelearn` class is thus based on three dedicated subclasses, `SdeModel`, `SdeSampling` and `SdeData`, 
 containing information about the model, the sampling structure and the observed data respectively. First these three classes 
 must be created:
 
