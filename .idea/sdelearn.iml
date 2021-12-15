@@ -6,7 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/sdepy-pkg/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/tests/local" />
     </content>
-    <orderEntry type="inheritedJdk" />
+    <orderEntry type="jdk" jdkName="Python 3.8 (py-uima)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

@@ -37,13 +37,11 @@ if __name__ == '__main__':
         return out
 
 
+    par_names = {"drift": ["theta_dr00", "theta_dr01", "theta_dr10", "theta_dr11"],
+                 "diffusion": ["theta_di00", "theta_di01", "theta_di10", "theta_di11"]}
     sde = Sde(sampling=SdeSampling(initial=0, terminal=2, delta=0.01),
-              model=SdeModel(b, A, mod_shape=[2, 2],
-                             par_names={"drift": ["theta_dr00", "theta_dr01", "theta_dr10", "theta_dr11"],
-                                              "diffusion": ["theta_di00", "theta_di01", "theta_di10", "theta_di11"]},
-                             mode='fun'
-                             )
-              )
+              model=SdeModel(b, A, mod_shape=[2, 2], par_names=par_names, mode='fun'))
+
     print(sde)
     truep = {"theta_dr00": 0, "theta_dr01": -0.5, "theta_dr10": 0, "theta_dr11": -0.5, "theta_di00": -1, "theta_di01": 0, "theta_di10": -1, "theta_di11": 1}
     sde.simulate(truep=truep, x0=[1, 2])
@@ -51,12 +49,12 @@ if __name__ == '__main__':
     sde.plot()
 
     qmle = Qmle(sde)
-
+    startp = dict(zip([p for k in par_names.keys() for p in par_names.get(k)],
+                      np.round(np.abs(np.random.randn(len(par_names))), 1)))
     qmle.fit(truep, method='BFGS')
     qmle.est
-    qmle.optim
-
-
+    qmle.optim_info
+    qmle.predict().plot()
     # symbol mode
 
     n_var = 2
