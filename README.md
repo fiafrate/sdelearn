@@ -154,7 +154,7 @@ Create the Sde object, specifying the parameters used in the drift and diffusion
 
 Set the true value of the parameter and simulate a sample path of the process:
 
-    truep = {"theta.dr00": 0, "theta.dr01": -0.5, "theta.dr10": 0, "theta.dr11": -0.5, "theta.di00": 0, "theta.di01": 1, "theta.di10": 0, "theta.di11": 1}
+    truep = {"theta_dr00": 0, "theta_dr01": -0.5, "theta_dr10": 0, "theta_dr11": -0.5, "theta_di00": 0, "theta_di01": 1, "theta_di10": 0, "theta_di11": 1}
     sde.simulate(truep=truep, x0=[1, 2])
 
 
@@ -165,8 +165,12 @@ Plot the simulated path:
 Fit the model using a quasi-maximum-likelihood estimator:
 
     qmle = Qmle(sde)
-    startp = dict(zip([p for k in par_names.keys() for p in par_names.get(k)],
-                      np.round(np.abs(np.random.randn(len(par_names))), 1)))
+
+    # generate some random starting values
+    all_param = [p for k in par_names.keys() for p in par_names.get(k)]
+    n_param = len(all_param)
+    startp = dict(zip(all_param, np.round(np.abs(np.random.randn(n_param)), 1)))
+    
     qmle.fit(startp, method='BFGS')
 
 See the results: estimated parameter, its variance covariance matrix and information about the optimization process
