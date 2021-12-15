@@ -113,7 +113,7 @@ accessed by `Sde.model.param`.
 
 ## Examples
 
-A multivariate model.
+Fit a multivariate SDE model from simulated data (script [sdelearn.py](tests/sdelearn.py)).
 
 **Functional mode**. This is the direct way to approach Sde modeling with `sdelearn`.
 Import the `sdelearn` libray
