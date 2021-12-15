@@ -8,7 +8,7 @@ It includes simulation routines as well as estimation methods based on observed 
 The `sdelearn` package is available on the TestPyPi repository
 and can be installed by running
 
-    pip install -i https://test.pypi.org/simple/ sdelearn
+     pip install -i https://test.pypi.org/pypi/ --extra-index-url https://pypi.org/simple sdelearn
 
 ## How to create a `sdelearn` class?
 The `sdelearn` class is the main class containing the information about a SDE.

@@ -1,4 +1,4 @@
-from sdelearn import Sde
+from .sdelearn import Sde
 import numpy as np
 
 

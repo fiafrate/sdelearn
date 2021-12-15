@@ -1,8 +1,8 @@
 import numpy as np
 
-from sde_sampling import SdeSampling as Samp
-from sde_model import SdeModel as Mod
-from sde_data import SdeData as Data
+from .sde_sampling import SdeSampling as Samp
+from .sde_model import SdeModel as Mod
+from .sde_data import SdeData as Data
 
 
 class Sde:
