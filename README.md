@@ -186,7 +186,7 @@ Compute and show predictions (estimated trend)
 
 **Symbolic mode**.
 
-    from sdelearner import *
+    from sdelearn import *
     import numpy as np
     import sympy as sym
 
