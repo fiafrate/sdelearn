@@ -222,7 +222,7 @@ class Qmle(SdeLearner):
 
         HESSA1 = np.einsum('nd, ndpq -> npq', self.DXS_inv[:, 0, :], Hbs)
         HESSA2 = np.einsum('npd, ndq -> npq', Jbs.transpose((0, 2, 1)), np.einsum('nde, nep -> ndp', self.Ss_inv, Jbs))
-        hess_alpha = 2 * HESSA1 - 2 * HESSA2
+        hess_alpha = np.sum(-2 * HESSA1 + 2 * HESSA2, axis=0)
 
         GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
         GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
@@ -238,9 +238,9 @@ class Qmle(SdeLearner):
 
         hess_beta = - HESSB1 + HESSB2 - 1 / dn * HESSB3
         # make sure result is symmetric
-        hess_beta = 0.5 * (hess_beta + hess_beta.transpose((0, 2, 1)))
-        hess_ab = np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs)
+        hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
+        hess_ab = -2* np.sum(np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)
 
-        hess_i = -2 * np.block([[hess_alpha, hess_ab], [hess_ab.transpose((0, 2, 1)), hess_beta]]) * 1 / len(self.batch_id)
-        return 0.5 * np.sum(hess_i, axis=0)
+        hess = 0.5*np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
+        return hess
 

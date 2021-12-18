@@ -53,5 +53,5 @@ class SdeSampling:
 
 
     def __str__(self):
-        out = '\nSde Sampling object ---- \n\nInitial time: {0}, Terminal time: {1}, {2} observations'.format(self.initial, self.terminal, self.n)
+        out = '\nSde Sampling object ---- \n\nInitial time: {0}, Terminal time: {1}\n{2} observations with time delta{3}'.format(self.initial, self.terminal, self.n, self.delta)
         return out

@@ -102,7 +102,7 @@ class SdeModel:
 
     def set_param(self, par_names):
         self.drift_par = par_names["drift"]
-        self.diff_par = par_names["drift"]
+        self.diff_par = par_names["diff"]
         self.param = [self.drift_par, self.diff_par]
 
     def set_var_names(self, var_names):
