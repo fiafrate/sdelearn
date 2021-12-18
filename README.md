@@ -3,6 +3,7 @@
 
 This package implements functionalities for working with Stochastic Differential Equations models (SDEs for short).
 It includes simulation routines as well as estimation methods based on observed time series. 
+This package is inspired by the R library [yuima](https://yuimaproject.com/).
 
 ### Installation
 The `sdelearn` package is available on the TestPyPi repository
