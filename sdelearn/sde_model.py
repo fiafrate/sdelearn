@@ -29,6 +29,7 @@ class SdeModel:
         # vectorized as a result of https://github.com/sympy/sympy/issues/5642:
         # if there are contants in the expression the result will be a single scalar,
         # resulting in a ragged array. Operations on such arrays appear to be deprecated in numpy
+        # SOLVED: ADDED INVISIBLE MULTIPLICATION BY ZERO SYMBOL TO CONSTANT EXPRESSIONS
         self.der_expr = None
         self.der_foo = None
 

@@ -1,1 +1,4 @@
 tests/local/
+dist/
+build/
+sdelearn.egg-info/
