@@ -183,10 +183,15 @@ class AdaLasso(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None, cyclic=False, **kwargs):
+    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None, cyclic=False, block_wise=False, **kwargs):
 
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
+
+        it_count = 1
+        status = 1
+        message = ''
+
 
         t_prev = 1
         x_prev = np.array(x0)
@@ -199,22 +204,33 @@ class AdaLasso(SdeLearner):
         jac_y = self.ini_hess @ (y_curr - par_ini)
         padding = np.ones_like(jac_y)
 
+        assert not cyclic and block_wise, 'choose either coordinate-wise (cyclic) or block-wise estimate'
+
         if cyclic:
             padding = np.zeros_like(jac_y)
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
 
+        if block_wise:
+            padding = np.zeros_like(jac_y)
+            # names in initial est
+            ini_names = list(self.ini_est.keys())
+            # indices of names per group
+            group_idx = {k: [ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            group_names = list(group_idx.keys())
+            padding[group_idx[group_names[it_count % len(group_names)]]] = 1
+
+
+
         if cyclic:
-            s = 1/np.diag(self.ini_hess)[padding == 1]
+            s = 0.5/np.diag(self.ini_hess)[padding == 1]
         else:
             #s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
-            s = 1 / self.lip
+            s = 0.5 / self.lip
 
         x_curr = self.soft_threshold(y_curr - s * jac_y * padding, penalty * s)
 
-        it_count = 1
-        status = 1
-        message = ''
+
 
         while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * s and it_count < max_it:
 
@@ -250,7 +266,7 @@ class AdaLasso(SdeLearner):
 
             t_prev = t_curr
 
-
+            it_count += 1
 
             if cyclic:
                 # print(padding)
@@ -259,10 +275,17 @@ class AdaLasso(SdeLearner):
                     cycle_start = np.argmax(jac_y)
                     padding = np.zeros_like(jac_y)
                     padding[cycle_start] = 1
+
+            if block_wise:
+                padding = np.zeros_like(jac_y)
+                # names in initial est
+                # indices of names per group
+                padding[group_idx[group_names[it_count % len(group_names)]]] = 1
+
             # print(x_curr)
             # print(str(jac_y) + '\n\n')
 
-            it_count += 1
+
 
         if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * s:
             message = 'Maximum number of iterations reached'
