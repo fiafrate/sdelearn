@@ -10,6 +10,7 @@ import warnings
 
 import copy
 
+
 class AdaLasso(SdeLearner):
     def __init__(self, sde, base_estimator, weights=None, delta=0, penalty=None, **kwargs):
         """
@@ -55,6 +56,19 @@ class AdaLasso(SdeLearner):
         self.lip = np.max(v)
         self.ini_hess = a @ np.diag(v) @ a.transpose()
 
+        # info about parameter groups, used in block estimate
+
+        # names in initial est
+        self.ini_names = list(self.ini_est.keys())
+        # indices of names per group
+        self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+        self.group_names = list(self.group_idx.keys())
+        # setup block lipschitiz contants
+        block_hess = np.array(
+            [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()])
+        self.block_lip = np.linalg.eigvalsh(block_hess).max(axis=1)
+
+        # setup weights
         self.delta = delta
         self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
 
@@ -96,26 +110,30 @@ class AdaLasso(SdeLearner):
         return out
 
     def fit(self, cv=None, **kwargs):
-
-        self.optim_info['args'] = {'cv': cv, **kwargs}
-
-        # in this case start is initial estimate, assumed to be already in model order
-        # and the bounds are assumed to be in the same order, so no check on the order is needed
-
-
         """
-
         :param cv: controls validation of the lambda parameter in the lasso path. If none no validation takes place. Otherwise cv must be
         a number in (0,1) controlling the proportion of obs to be used as validation. E.g. if cv = 0.1 the last 10% of
         obs is used as validation and the first 90% as training. Performance on validation set is measured using the loss
         function of the base estimator. Finally the estimate path on the full dataset is computed: the field est
         is filled with the estimate corresponding  to the optimal lambda, which is in turn saved in the field lambda_opt
         :param kwargs:
-        :return:
+        :return: self
         """
+        self.optim_info['args'] = {'cv': cv, **kwargs}
+        self.path_info = []
+        # in this case start is initial estimate, assumed to be already in model order
+        # and the bounds are assumed to be in the same order, so no check on the order is needed
+
         if cv is None:
             for i in range(len(self.est_path) - 1):
+                # fix epsilon:
+                eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
+                kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
+                # compute est
                 cur_est = self.proximal_gradient(self.est_path[i], self.penalty[i + 1], **kwargs)
+                # restore epsilon for next iteration
+                kwargs.update(epsilon=eps_ini)
+                # store results
                 self.path_info.append(cur_est)
                 self.est_path[i + 1] = cur_est['x']
         else:
@@ -127,13 +145,14 @@ class AdaLasso(SdeLearner):
             sde_tr = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(first_n=n - n_val + 1))
 
             sde_val.set_data(self.sde.data.data.iloc[-n_val:])
-            sde_tr.set_data(self.sde.data.data.iloc[:n-n_val+1])
+            sde_tr.set_data(self.sde.data.data.iloc[:n - n_val + 1])
 
             # create auxiliary estimator of same type of base est, on training data
             aux_est = type(self.base_est)(sde_tr)
             aux_est.fit(start=self.ini_est, **self.base_est.optim_info['args'])
-            lasso_tr = AdaLasso(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta, penalty=self.penalty)
-            lasso_tr.fit()
+            lasso_tr = AdaLasso(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
+                                penalty=self.penalty)
+            lasso_tr.fit(**kwargs)
 
             # create aux est object on validation data and compute loss
             aux_est = type(self.base_est)(sde_val)
@@ -145,15 +164,14 @@ class AdaLasso(SdeLearner):
                     pass
 
             # compute full path
-            self.fit()
+            self.fit(**kwargs)
 
             # compute final estimate using optimal lambda
             self.lambda_opt = self.penalty[np.argmin(val_loss)]
             self.est = dict(zip(aux_est.sde.model.param, self.est_path[np.argmin(val_loss)]))
             self.vcov = np.linalg.inv(self.ini_hess)
 
-
-
+        return self
 
     def soft_threshold(self, par, penalty):
         return np.sign(par) * np.maximum(np.abs(par) - penalty * self.w_ada, 0)
@@ -183,7 +201,8 @@ class AdaLasso(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None, cyclic=False, block_wise=False, **kwargs):
+    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None, cyclic=False, block_wise=False,
+                          **kwargs):
 
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
@@ -192,19 +211,18 @@ class AdaLasso(SdeLearner):
         status = 1
         message = ''
 
-
         t_prev = 1
         x_prev = np.array(x0)
         y_curr = x_prev
 
         if bounds is not None:
             bounds = np.array(bounds).transpose()
-            assert np.all(y_curr > bounds[0]) and np.any(y_curr < bounds[1]), 'starting point outside of bounds'
+            assert np.all(y_curr > bounds[0]) and np.all(y_curr < bounds[1]), 'starting point outside of bounds'
 
         jac_y = self.ini_hess @ (y_curr - par_ini)
         padding = np.ones_like(jac_y)
 
-        assert not cyclic and block_wise, 'choose either coordinate-wise (cyclic) or block-wise estimate'
+        assert not (cyclic and block_wise), 'choose either coordinate-wise (cyclic) or block-wise estimate'
 
         if cyclic:
             padding = np.zeros_like(jac_y)
@@ -212,33 +230,45 @@ class AdaLasso(SdeLearner):
             padding[cycle_start] = 1
 
         if block_wise:
-            padding = np.zeros_like(jac_y)
-            # names in initial est
-            ini_names = list(self.ini_est.keys())
-            # indices of names per group
-            group_idx = {k: [ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
-            group_names = list(group_idx.keys())
-            padding[group_idx[group_names[it_count % len(group_names)]]] = 1
-
-
+            padding = np.zeros_like(jac_y, dtype=int)
+            padding[self.group_idx[self.group_names[it_count % len(self.group_names)]]] = 1
 
         if cyclic:
-            s = 0.5/np.diag(self.ini_hess)[padding == 1]
+            s = 0.5 / np.diag(self.ini_hess)[padding == 1]
+        elif block_wise:
+            s = 0.5 / self.block_lip[it_count % len(self.group_names)]
         else:
-            #s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
+            # s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
             s = 0.5 / self.lip
 
-        x_curr = self.soft_threshold(y_curr - s * jac_y * padding, penalty * s)
+        # compute full vector of updates even in coordinate/block case. Otherwise a
+        # single coordinate (or a block) doesn't change algorithm would stop, even if convergence is not reached!
+        x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+        x_curr = np.where(padding == 1, x_soft, x_prev)
 
+        while np.linalg.norm(x_soft - x_prev, ord=2) >= 0.5 * epsilon / self.lip and it_count < max_it:
 
-
-        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * s and it_count < max_it:
+            it_count += 1
 
             if cyclic:
-                s = 1/np.diag(self.ini_hess)[padding == 1]
+                #print(padding)
+                padding = np.roll(padding, 1)
+                if np.argmax(padding) == cycle_start:
+                    cycle_start = np.argmax(jac_y)
+                    padding = np.zeros_like(jac_y)
+                    padding[cycle_start] = 1
+
+            if block_wise:
+                padding = np.zeros_like(jac_y)
+                padding[self.group_idx[self.group_names[it_count % len(self.group_names)]]] = 1
+
+            if cyclic:
+                s = 0.5 / np.diag(self.ini_hess)[padding==1]
+            elif block_wise:
+                s = 0.5 / self.block_lip[it_count % len(self.group_names)]
             else:
-                #s = self.prox_backtrack(y_curr=y_curr, gamma=0.8, penalty=penalty)
-                s = 1/self.lip
+                # s = self.prox_backtrack(y_curr=y_curr, gamma=0.8, penalty=penalty)
+                s = 0.5 / self.lip
 
             # print('s ' + str(s) + '\n')
 
@@ -258,34 +288,16 @@ class AdaLasso(SdeLearner):
             #
             jac_y = self.ini_hess @ (y_curr - par_ini)
             x_prev = x_curr
-            x_curr = self.soft_threshold(y_curr - s * jac_y * padding, penalty * s)
-
+            x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+            x_curr = np.where(padding == 1, x_soft, x_prev)
             if bounds is not None:
                 y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
                 y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
 
             t_prev = t_curr
 
-            it_count += 1
-
-            if cyclic:
-                # print(padding)
-                padding = np.roll(padding, 1)
-                if np.argmax(padding) == cycle_start:
-                    cycle_start = np.argmax(jac_y)
-                    padding = np.zeros_like(jac_y)
-                    padding[cycle_start] = 1
-
-            if block_wise:
-                padding = np.zeros_like(jac_y)
-                # names in initial est
-                # indices of names per group
-                padding[group_idx[group_names[it_count % len(group_names)]]] = 1
-
             # print(x_curr)
             # print(str(jac_y) + '\n\n')
-
-
 
         if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * s:
             message = 'Maximum number of iterations reached'
@@ -297,7 +309,6 @@ class AdaLasso(SdeLearner):
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
                 'jac': jac_y, 'epsilon': epsilon}
 
-
     def plot(self):
         plt.figure()
         plt.title('Coefficients path')
@@ -305,4 +316,4 @@ class AdaLasso(SdeLearner):
         plt.xlabel('log lambda')
         plt.plot(np.log(self.penalty), self.est_path)
         plt.show()
-        return
+        return self
