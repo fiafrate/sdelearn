@@ -127,12 +127,12 @@ class AdaLasso(SdeLearner):
         if cv is None:
             for i in range(len(self.est_path) - 1):
                 # fix epsilon:
-                eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
-                kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
+                #eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
+                #kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
                 # compute est
                 cur_est = self.proximal_gradient(self.est_path[i], self.penalty[i + 1], **kwargs)
                 # restore epsilon for next iteration
-                kwargs.update(epsilon=eps_ini)
+                #kwargs.update(epsilon=eps_ini)
                 # store results
                 self.path_info.append(cur_est)
                 self.est_path[i + 1] = cur_est['x']
@@ -188,20 +188,21 @@ class AdaLasso(SdeLearner):
         g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
         g_2 = 0.5 * (y_curr - par_ini) @ self.ini_hess @ (y_curr - par_ini)
         qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
-                + (1 / 2 * s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+                + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
 
         if g_1 <= qs_12:
             return s
 
         while g_1 > qs_12:
             s = gamma * s
-            x_curr = self.soft_threshold(y_curr - s * jac_y, penalty)
+            x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+            g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
             qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
-                    + (1 / 2 * s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+                    + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None, cyclic=False, block_wise=False,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-02, max_it=1e4, bounds=None, cyclic=False, block_wise=False, backtracking=False,
                           **kwargs):
 
         par_ini = np.array(list(self.ini_est.values()))
@@ -238,7 +239,7 @@ class AdaLasso(SdeLearner):
         elif block_wise:
             s = 0.5 / self.block_lip[it_count % len(self.group_names)]
         else:
-            # s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
+            #s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
             s = 0.5 / self.lip
 
         # compute full vector of updates even in coordinate/block case. Otherwise a
@@ -246,7 +247,7 @@ class AdaLasso(SdeLearner):
         x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
         x_curr = np.where(padding == 1, x_soft, x_prev)
 
-        while np.linalg.norm(x_soft - x_prev, ord=2) >= 0.5 * epsilon / self.lip and it_count < max_it:
+        while np.linalg.norm(x_soft - x_prev, ord=2) >= epsilon * s and it_count < max_it:
 
             it_count += 1
 
@@ -267,7 +268,7 @@ class AdaLasso(SdeLearner):
             elif block_wise:
                 s = 0.5 / self.block_lip[it_count % len(self.group_names)]
             else:
-                # s = self.prox_backtrack(y_curr=y_curr, gamma=0.8, penalty=penalty)
+                #s = self.prox_backtrack(y_curr=y_curr, gamma=0.8, penalty=penalty)
                 s = 0.5 / self.lip
 
             # print('s ' + str(s) + '\n')
@@ -309,11 +310,14 @@ class AdaLasso(SdeLearner):
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
                 'jac': jac_y, 'epsilon': epsilon}
 
-    def plot(self):
+    def plot(self, save_fig=None):
         plt.figure()
         plt.title('Coefficients path')
         plt.ylabel('Estimates')
         plt.xlabel('log lambda')
         plt.plot(np.log(self.penalty), self.est_path)
-        plt.show()
+        if save_fig is None:
+            plt.show()
+        else:
+            plt.savefig(save_fig)
         return self

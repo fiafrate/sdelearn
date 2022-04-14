@@ -59,10 +59,18 @@ class Sde:
 
         return self
 
-    def plot(self):
+    def plot(self, save_fig=None):
+        '''
+
+        :param save_fig: either None (default) in which case figure is shown, or string containing file name to save the plot
+        :return:
+        '''
         #plt.figure()
         # plt.plot(self.sampling.grid, self.data.data)
-        self.data.data.plot()
+        if save_fig is None:
+            self.data.data.plot()
+        else:
+            self.data.data.plot().figure.savefig(save_fig)
         return self
 
     def __str__(self):

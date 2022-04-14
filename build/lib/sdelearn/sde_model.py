@@ -29,6 +29,7 @@ class SdeModel:
         # vectorized as a result of https://github.com/sympy/sympy/issues/5642:
         # if there are contants in the expression the result will be a single scalar,
         # resulting in a ragged array. Operations on such arrays appear to be deprecated in numpy
+        # TEMP SOLVED: ADDED INVISIBLE MULTIPLICATION BY ZERO SYMBOL TO CONSTANT EXPRESSIONS
         self.der_expr = None
         self.der_foo = None
 
@@ -91,19 +92,13 @@ class SdeModel:
         self.npar_dr = len(self.drift_par)
         self.npar_di = len(self.diff_par)
 
-        '''
-        # if drift and diff are vector/matrix valued dims cannot be inferred!
-        if type(drift) is list:
-            self.n_var = len(drift)
-        else:
-            self.n_var = 1
-
-        '''
+        self.par_groups = {'drift': self.drift_par, 'diff': self.diff_par}
 
     def set_param(self, par_names):
         self.drift_par = par_names["drift"]
-        self.diff_par = par_names["diff"]
+        self.diff_par = par_names["diffusion"]
         self.param = [self.drift_par, self.diff_par]
+        self.par_groups = {'drift': self.drift_par, 'diff': self.diff_par}
 
     def set_var_names(self, var_names):
         self.state_var = var_names
