@@ -48,7 +48,7 @@ class SdeLearner:
         montecarlo estimate of average value
         :param x0: starting point for simulations, if None the first observation of data is used
         :param n_rep: number of simulations for estimating expected value
-        :param sampling: SdeSampling object specifying where predictions take place. If note same as learner's sde is used
+        :param sampling: SdeSampling object specifying where predictions take place. If None same as learner's sde is used
         :param kwargs: params passed to specific methods
         :return: dataframe with predictions
         """

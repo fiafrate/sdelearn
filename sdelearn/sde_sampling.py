@@ -50,7 +50,13 @@ class SdeSampling:
             new_samp.grid = new_samp.grid[np.argmin(np.abs(new_samp.grid - new_init)):]
             new_samp.initial = new_samp.grid[0]
             new_samp.n = len(new_samp.grid)
-
+            new_samp.x0 = None
+        elif from_range is not None:
+            new_samp.grid = new_samp.grid[from_range[0]:from_range[1]]
+            new_samp.initial = new_samp.grid[0]
+            new_samp.terminal = new_samp.grid[- 1]
+            new_samp.n = len(new_samp.grid)
+            new_samp.x0 = None
         return new_samp
 
     def __str__(self):

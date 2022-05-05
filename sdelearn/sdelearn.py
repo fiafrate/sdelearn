@@ -35,7 +35,7 @@ class Sde:
         assert self.sampling.n == self.data.n_obs, 'Number of observation in sampling does not match the shape of data!'
         if format:
             self.data.format_data(time_index=self.sampling.grid, col_names=self.model.state_var)
-        self.sampling.x0 = np.array(self.data.data.iloc[0, :])
+        self.sampling.x0 = np.array(self.data.data.iloc[0])
 
         return self
 
