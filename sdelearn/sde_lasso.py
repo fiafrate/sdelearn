@@ -109,13 +109,17 @@ class AdaLasso(SdeLearner):
 
         return out
 
-    def fit(self, cv=None, **kwargs):
+    def fit(self, cv=None, nfolds=5, **kwargs):
         """
-        :param cv: controls validation of the lambda parameter in the lasso path. If none no validation takes place. Otherwise cv must be
-        a number in (0,1) controlling the proportion of obs to be used as validation. E.g. if cv = 0.1 the last 10% of
-        obs is used as validation and the first 90% as training. Performance on validation set is measured using the loss
+        :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
+            - None no validation takes place.
+            - cv in (0,1): proportion of obs to be used as validation. E.g. if cv = 0.1 the last 10% of
+        obs is used as validation and the first 90% as training.
+            - cv = True: k-fold cross validation.
+        Performance on validation set is measured using the loss
         function of the base estimator. Finally the estimate path on the full dataset is computed: the field est
         is filled with the estimate corresponding  to the optimal lambda, which is in turn saved in the field lambda_opt
+        :param nfolds: number of folds for cross validation (considered only if cv = True)
         :param kwargs:
         :return: self
         """
@@ -127,16 +131,16 @@ class AdaLasso(SdeLearner):
         if cv is None:
             for i in range(len(self.est_path) - 1):
                 # fix epsilon:
-                #eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
-                #kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
+                # eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
+                # kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
                 # compute est
                 cur_est = self.proximal_gradient(self.est_path[i], self.penalty[i + 1], **kwargs)
                 # restore epsilon for next iteration
-                #kwargs.update(epsilon=eps_ini)
+                # kwargs.update(epsilon=eps_ini)
                 # store results
                 self.path_info.append(cur_est)
                 self.est_path[i + 1] = cur_est['x']
-        else:
+        elif 0 < cv < 1:
             n = self.sde.data.n_obs
             n_val = int(cv * n)
 
@@ -171,16 +175,41 @@ class AdaLasso(SdeLearner):
             self.est = dict(zip(aux_est.sde.model.param, self.est_path[np.argmin(val_loss)]))
             self.vcov = np.linalg.inv(self.ini_hess)
 
+        elif cv == True:
+            nfolds = int(cv)
+            n = self.sde.data.n_obs
+
+            for k in range(nfolds):
+                n_val = int(cv * n)
+
+                # create auxiliary sde objects
+                sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(last_n=n_val))
+                sde_tr = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(first_n=n - n_val + 1))
+
+                sde_val.set_data(self.sde.data.data.iloc[-n_val:])
+                sde_tr.set_data(self.sde.data.data.iloc[:n - n_val + 1])
+
+
         return self
 
-    def soft_threshold(self, par, penalty):
-        return np.sign(par) * np.maximum(np.abs(par) - penalty * self.w_ada, 0)
+    def soft_threshold(self, par, penalty, padding=None):
+        '''
+        lasso soft-thresholding operator
+        :param par: evaluation point
+        :param penalty: penalty parameter multiplying adaptive weights in Sde.AdaLasso object
+        :param padding: optionally compute soft thresh on a subvector indexed by padding == 1
+        :return: vector of component wise soft-thresholding of par
+        '''
+        if padding is None:
+            padding = np.ones_like(par)
+        w = self.w_ada[padding == 1]
+        return np.sign(par) * np.maximum(np.abs(par) - penalty * w, 0)
 
-    def prox_backtrack(self, y_curr, gamma, penalty):
+    def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1):
 
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
-        s = 1
+        s = s_ini
 
         jac_y = self.ini_hess @ (y_curr - par_ini)
         x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
@@ -202,9 +231,25 @@ class AdaLasso(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-02, max_it=1e4, bounds=None, cyclic=False, block_wise=False, backtracking=False,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-02, max_it=1e4, bounds=None,
+                          opt_alg="fista",
+                          backtracking=False,
                           **kwargs):
-
+        '''
+        compute proximal gradient algorithms for regularization path optimization.
+        :param x0: array-like starting point
+        :param penalty: value penalty parameter
+        :param epsilon: relative convergence factor: converge if ||x_prev - x_curr|| < 0.5 * epsilon / Lip_const
+        :param max_it: maximum number of iterations allowed
+        :param bounds: matrix-like, parameter bounds with rows [par_min, par_max]
+        :param opt_alg: choose optimization algorithm: either "fista", "cyclic" (coordinate-wise with custom order) or "block_wise"
+            if sde model has block paramters
+        :param backtracking: boolean, if true use backtracking to determine stepsize, otherwise use relevant lip constant
+        :param kwargs
+        :return: dict 'x': last x point reached, 'f': loss function at x, 'status': convergence status 0/1,
+            'message': convergence message, 'niter': number of iterations,\
+                'jac': gradient of f at x, 'epsilon': epsilon}
+        '''
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
 
@@ -212,95 +257,133 @@ class AdaLasso(SdeLearner):
         status = 1
         message = ''
 
-        t_prev = 1
         x_prev = np.array(x0)
-        y_curr = x_prev
+        y_curr = np.copy(x_prev)
 
         if bounds is not None:
             bounds = np.array(bounds).transpose()
             assert np.all(y_curr > bounds[0]) and np.all(y_curr < bounds[1]), 'starting point outside of bounds'
 
-        jac_y = self.ini_hess @ (y_curr - par_ini)
-        padding = np.ones_like(jac_y)
+        padding = np.ones_like(par_ini)
 
-        assert not (cyclic and block_wise), 'choose either coordinate-wise (cyclic) or block-wise estimate'
+        assert opt_alg in ["fista", "cyclic", "block_wise"], 'invalid opt_alg'
 
-        if cyclic:
-            padding = np.zeros_like(jac_y)
+        block_end = True
+
+        if opt_alg == 'fista':
+            t_prev = 1
+            s_lip = 1 / self.lip
+        elif opt_alg == "cyclic":
+            padding = np.zeros_like(x_prev)
+            jac_y = self.ini_hess @ (x_prev - par_ini)
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
+            s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+            block_end = False
+        elif opt_alg == "block_wise":
+            padding = np.zeros_like(x_prev, dtype=int)
+            padding[self.group_idx[self.group_names[(it_count-1) % len(self.group_names)]]] = 1
+            s_lip = 1 / self.block_lip[(it_count-1) % len(self.group_names)]
+            block_end = False
 
-        if block_wise:
-            padding = np.zeros_like(jac_y, dtype=int)
-            padding[self.group_idx[self.group_names[it_count % len(self.group_names)]]] = 1
-
-        if cyclic:
-            s = 0.5 / np.diag(self.ini_hess)[padding == 1]
-        elif block_wise:
-            s = 0.5 / self.block_lip[it_count % len(self.group_names)]
+        # stepsize choice
+        if backtracking:
+            s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
+            s = max(s, s_lip)
         else:
-            #s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
-            s = 0.5 / self.lip
+            s = s_lip
 
         # compute full vector of updates even in coordinate/block case. Otherwise a
         # single coordinate (or a block) doesn't change algorithm would stop, even if convergence is not reached!
-        x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
-        x_curr = np.where(padding == 1, x_soft, x_prev)
+        # x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+        # x_curr = np.where(padding == 1, x_soft, x_prev)
+        jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
+        x_curr = np.copy(x_prev)
+        x_curr[padding == 1] = self.soft_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
 
-        while np.linalg.norm(x_soft - x_prev, ord=2) >= epsilon * s and it_count < max_it:
+        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
 
             it_count += 1
 
-            if cyclic:
-                #print(padding)
+            if opt_alg == 'fista':
+
+                if backtracking:
+                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
+                    s = max(s, s_lip)
+
+                t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
+
+                y_curr = x_curr + (t_prev - 1) / t_curr * (x_curr - x_prev)
+
+                #
+                jac_y = self.ini_hess @ (y_curr - par_ini)
+                x_prev = np.copy(x_curr)
+                x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+                x_curr = np.where(padding == 1, x_soft, x_prev)
+                if bounds is not None:
+                    y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
+                    y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
+                t_prev = t_curr
+
+            elif opt_alg == "cyclic":
+                # auxiliary vector y_curr is updated coordinate-wise.
+                # x_prev serves as a monitor to be checked only when the full vector has been updated
                 padding = np.roll(padding, 1)
+                block_end = False
                 if np.argmax(padding) == cycle_start:
+                    # at beginning of new cycle
+                    block_end = True
+                    jac_y = self.ini_hess @ (x_prev - par_ini)
                     cycle_start = np.argmax(jac_y)
-                    padding = np.zeros_like(jac_y)
+                    padding = np.zeros_like(x_prev)
                     padding[cycle_start] = 1
+                    x_prev = np.copy(x_curr)
 
-            if block_wise:
-                padding = np.zeros_like(jac_y)
-                padding[self.group_idx[self.group_names[it_count % len(self.group_names)]]] = 1
+                elif np.argmax(np.roll(padding, 1)) == cycle_start:
+                    # at the end of current cycle
+                    block_end = True
 
-            if cyclic:
-                s = 0.5 / np.diag(self.ini_hess)[padding==1]
-            elif block_wise:
-                s = 0.5 / self.block_lip[it_count % len(self.group_names)]
-            else:
-                #s = self.prox_backtrack(y_curr=y_curr, gamma=0.8, penalty=penalty)
-                s = 0.5 / self.lip
 
-            # print('s ' + str(s) + '\n')
+                s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+                if backtracking:
+                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
+                    s = max(s, s_lip)
+                else:
+                    s = s_lip
 
+                y_curr = np.copy(x_curr)
+                jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
+                x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
+
+            elif opt_alg == "block_wise":
+                padding = np.zeros_like(x_prev, dtype=int)
+                padding[self.group_idx[self.group_names[(it_count-1) % len(self.group_names)]]] = 1
+                block_end = False
+
+                if it_count % len(self.group_names) == 0:
+                    # at end of current cycle can check condition
+                    block_end = True
+
+                elif it_count % len(self.group_names) == 1:
+                    # at beginning of new cycle store prev values
+                    x_prev = np.copy(x_curr)
+                #
+                s_lip = 1 / self.block_lip[(it_count-1) % len(self.group_names)]
+                if backtracking:
+                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
+                    s = max(s, s_lip)
+                else:
+                    s = s_lip
+                y_curr = np.copy(x_curr)
+                jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
+                x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
+
+            # fix bounds
             if bounds is not None:
                 x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
                 x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
 
-            # # interrupt execution before costly evaluation of the gradient
-            # if np.linalg.norm(x_curr - x_prev) < 0.1 * epsilon * np.linalg.norm(x_prev):
-            #     message = 'Relative reduction less than {0}'.format(0.1*epsilon)
-            #     return {'x': x_curr, 'f': f(x_curr, **kwargs), 'status': status, 'message': message, 'niter': it_count, 'jac': jac_y, 'epsilon': epsilon}
-
-            t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
-
-            y_curr = x_curr + (t_prev - 1) / t_curr * (x_curr - x_prev)
-
-            #
-            jac_y = self.ini_hess @ (y_curr - par_ini)
-            x_prev = x_curr
-            x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
-            x_curr = np.where(padding == 1, x_soft, x_prev)
-            if bounds is not None:
-                y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
-                y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
-
-            t_prev = t_curr
-
-            # print(x_curr)
-            # print(str(jac_y) + '\n\n')
-
-        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * s:
+        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip:
             message = 'Maximum number of iterations reached'
             status = 1
         else:

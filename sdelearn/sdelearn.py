@@ -25,10 +25,18 @@ class Sde:
         self.model = Mod(drift, diff, mod_shape, par_names, var_names)
         return self
 
-    def set_data(self, data):
+    def set_data(self, data, format=True):
+        """
+        sets the data attribute of Sde to data. If format = True (the default) data is formatted to have timestamp
+        and names corresponding to sampling and model attributes. :param data: :return:
+        """
         self.data = Data(data)
         assert self.model.n_var == self.data.data.shape[1], 'Number of variables in model does not match the shape of data!'
         assert self.sampling.n == self.data.n_obs, 'Number of observation in sampling does not match the shape of data!'
+        if format:
+            self.data.format_data(time_index=self.sampling.grid, col_names=self.model.state_var)
+        self.sampling.x0 = np.array(self.data.data.iloc[0, :])
+
         return self
 
     def simulate(self, truep, x0, ret_data=False):
@@ -55,7 +63,7 @@ class Sde:
             return sim
         else:
             self.set_data(sim)
-            self.data.format_data(time_index=self.sampling.grid, col_names=self.model.state_var)
+
 
         return self
 
