@@ -114,7 +114,7 @@ class AdaLasso(SdeLearner):
 
         return out
 
-    def fit(self, cv=None, nfolds=5, **kwargs):
+    def fit(self, cv=None, nfolds=5, cv_metric="ql", **kwargs):
         """
         :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
             - None no validation takes place.
@@ -125,10 +125,12 @@ class AdaLasso(SdeLearner):
         function of the base estimator. Finally the estimate path on the full dataset is computed: the field est
         is filled with the estimate corresponding  to the optimal lambda, which is in turn saved in the field lambda_opt
         :param nfolds: number of folds for cross validation (considered only if cv = True)
+        :param cv_metric: is cv is not None controls the loss metric to evaluate on validation sets, either
+            "ql" (quasi likelihood) or "mse" (prediction mse, based on Monte Carlo predictions as in SdeLearner.predict)
         :param kwargs:
         :return: self
         """
-        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, **kwargs}
+        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, **kwargs}
         self.path_info = []
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
@@ -168,7 +170,12 @@ class AdaLasso(SdeLearner):
             val_loss = np.full(len(lasso_tr.est_path) - 1, np.nan)
             for i in range(len(lasso_tr.est_path) - 1):
                 try:
-                    val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
+                    if cv_metric == "ql":
+                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
+                    elif cv_metric == "mse":
+                        lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
+                        val_loss[i] = \
+                            np.mean(lasso_tr.predict(sampling=sde_val.sampling).to_numpy() - sde_val.data.data.to_numpy()**2)
                 except:
                     pass
 
@@ -218,9 +225,16 @@ class AdaLasso(SdeLearner):
 
                 for i in range(len(lasso_tr.est_path) - 1):
                     try:
-                        val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
+                        if cv_metric == "ql":
+                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
+                        elif cv_metric == "mse":
+                            lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
+                            val_loss[i, k] = \
+                                np.mean(lasso_tr.predict(
+                                    sampling=sde_val.sampling).to_numpy() - sde_val.data.data.to_numpy() ** 2)
                     except:
                         pass
+
 
             # cv loss
             val_loss[np.isinf(val_loss)] = np.nan

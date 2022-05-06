@@ -30,7 +30,7 @@ class SdeLearner:
         self.optim_info['args'] = {**kwargs}
         # remember to check the order of the supplied values and bounds!
         # the following is a template of what should be at the beginning of the fit methods
-        start = {} # hypotetical dict of starting values
+        start = {}  # hypotetical dict of starting values
         bounds = []  # hypotetical list of bounds, assumed to have same order as start
         if kwargs.get('bounds') is not None:
             bounds = kwargs['bounds']
@@ -39,7 +39,6 @@ class SdeLearner:
             kwargs['bounds'] = bounds
 
         start = {k: start.get(k) for k in self.sde.model.param}
-
 
         pass
 
@@ -54,19 +53,20 @@ class SdeLearner:
         """
 
         if sampling is None:
-           new_samp = self.sde.sampling
+            new_samp = self.sde.sampling
         else:
             new_samp = sampling
 
         if x0 is None:
-            x0 = self.sde.data.original_data[0]
+            x0 = self.sde.data.data.iloc[0]
 
         new_sde = Sde(model=self.sde.model, sampling=new_samp, data=None)
-        pred_data = new_sde.simulate(self.est, x0, ret_data=True)/n_rep
+        pred_data = new_sde.simulate(self.est, x0, ret_data=True) / n_rep
         for i in range(n_rep - 1):
             pred_data += new_sde.simulate(self.est, x0, ret_data=True) / n_rep
 
-        new_sde.set_data(pred_data).data.format_data(time_index=new_sde.sampling.grid, col_names=new_sde.model.state_var)
+        new_sde.set_data(pred_data).data.format_data(time_index=new_sde.sampling.grid,
+                                                     col_names=new_sde.model.state_var)
 
         return new_sde.data.data
 
@@ -100,7 +100,7 @@ class SdeLearner:
 
     @staticmethod
     def generate_batch(batch, sde_learn, **kwargs):
-        return np.random.choice(a=sde_learn.sde.data.n_obs-1, size=int(np.floor(batch * sde_learn.sde.data.n_obs)),
+        return np.random.choice(a=sde_learn.sde.data.n_obs - 1, size=int(np.floor(batch * sde_learn.sde.data.n_obs)),
                                 replace=False)
 
     @staticmethod
@@ -226,7 +226,8 @@ class SdeLearner:
         if batch is not None:
             jac_y = np.array(jac(y_curr, batch_id=None, **kwargs))
 
-        return {'x': x_curr, 'f': f(x_curr, batch_id=None, **kwargs), 'status': status, 'message': message, 'niter': it_count,
+        return {'x': x_curr, 'f': f(x_curr, batch_id=None, **kwargs), 'status': status, 'message': message,
+                'niter': it_count,
                 'jac': jac_y, 'epsilon': epsilon, 'batch': batch}
 
     def __str__(self):
