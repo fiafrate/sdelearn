@@ -1,13 +1,12 @@
 Metadata-Version: 2.1
 Name: sdelearn
-Version: 0.1.3
+Version: 0.1.4
 Summary: SDElearn: a Python framework for Stochastic Differential Equations modeling
 Home-page: https://github.com/fiafrate/sdelearn
 Author: Francesco Iafrate
 Author-email: francesco.iafrate@uniroma1.it
 License: MIT
 Keywords: stochastic,differential,equations,statistical learning,inference
-Platform: UNKNOWN
 Classifier: Development Status :: 3 - Alpha
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python :: 3
@@ -85,21 +84,53 @@ is optional. Data can be added later e.g. by simulation or by using the `setData
 ## Learning model parameters using a `SdeLearner`
 
 The parameters of a SDE can be estimated using an object of class
-`SdeLearner`. Currently available learners are Qmle and AdaLasso.
-For evert learner the following functions are available
+`SdeLearner`. 
+A learner object is built around a Sde. Some learners (e.g. AdaLasso) 
+require information about an initial estimate. This is provided by
+supplying a fitted learner as `base_estimator` when the object is created.
+Details on the parameters depend on the specific implementation of each learner.
+Every Learner implements the following methods:
 
 * `loss`: computes the loss function associated with the learner (see specific implementations for details)
 * `fit`: learns the model parameters by minimizing the loss function
 * `predict`: estimates the trend of the series on a given set of times
 * `gradient`, `hessian`: compute the exact gradient and hessian of 
-the loss function. Available only in symbolic mode, not implemented for LSA based methods.
+the loss function. Available only in symbolic mode.
 
-A learner object is built around a Sde. Some learners (e.g. AdaLasso) 
-require information about an initial estimate. This is provided by
-supplying a fitted learner as `base_estimator` when the object is created.
-Details on the parameters depend on the specific implementation of each learner.
+Every Learner has the following fields:
+* `est`: dictionary of estimated parameters
+* `vcov`: (asymptotic) covariance matrix, based on observed Fisher information
+* `sde`: base Sde object
+* `optim_info`: dictionary containing info about the optimization process (e.g. number of iteration, method used, etc.)
 
-  
+
+
+_Currently available learners are Qmle and AdaLasso._
+
+### Qmle
+SdeLearner based on quasi maximum-likelihood estimation.
+```
+qmle = Qmle(sde)
+```
+Parameters: 
+* `sde`: object of class Sde
+
+#### Details
+The loss function is the negative log-quasi-likelihood.
+If the Sde object was specified in `symbolic` mode, 
+symbolic derivatives of the loss functions are computed.
+
+
+
+### AdaLasso
+SdeLearner based on Least Square Approximation (LSA) of the loss function.
+It requires a base estimator of class SdeLearner(e.g. Qmle) to obtain 
+an initial estimate and the Fisher information and to build 
+the penalized LSA objective function. 
+
+
+
+
 ## Technical details
 
 This section contains some information about the internal structure of the package
@@ -273,5 +304,3 @@ In this case the estimate corresponding to optimal lambda is computed:
 
     lasso.est
     lasso.vcov
-
-

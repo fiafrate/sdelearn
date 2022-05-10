@@ -152,9 +152,13 @@ class AdaLasso(SdeLearner):
             n_val = int(cv * n)
 
             # create auxiliary sde objects
-            sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(last_n=n_val))
-            sde_tr = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(first_n=n - n_val + 1))
+            sde_tr = copy.deepcopy(self.sde)
+            sde_val = copy.deepcopy(self.sde)
+            #sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(last_n=n_val))
+            #sde_tr = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(first_n=n - n_val + 1))
 
+            sde_tr.sampling = self.sde.sampling.sub_sampling(first_n=n - n_val + 1)
+            sde_val.sampling = self.sde.sampling.sub_sampling(last_n=n_val)
             sde_val.set_data(self.sde.data.data.iloc[-n_val:])
             sde_tr.set_data(self.sde.data.data.iloc[:n - n_val + 1])
 
@@ -173,7 +177,7 @@ class AdaLasso(SdeLearner):
                     if cv_metric == "ql":
                         val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
                     elif cv_metric == "mse":
-                        n_rep = kwargs['n_rep'] if kwargs['n_rep'] is not None else 1000
+                        n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                         lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
                         val_loss[i] = \
                             np.mean((lasso_tr.predict(sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy())**2)
@@ -198,20 +202,20 @@ class AdaLasso(SdeLearner):
             nval = n - ntr0
             nkth = int(nval / nfolds)
 
+            sde_tr = copy.deepcopy(self.sde)
+            sde_val = copy.deepcopy(self.sde)
             # array to store loss values
             val_loss = np.full((len(self.penalty) - 1, nfolds), np.nan)
             for k in range(nfolds):
                 # create auxiliary sde objects
-                sde_tr = Sde(model=self.sde.model,
-                             sampling=self.sde.sampling.sub_sampling(from_range=[0, ntr0 + k * nkth]))
+                sde_tr.sampling = self.sde.sampling.sub_sampling(from_range=[0, ntr0 + k * nkth])
                 sde_tr.set_data(self.sde.data.data.iloc[0:(ntr0 + k * nkth)])
                 if k < nfolds - 1:
-                    sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(
-                        from_range=[ntr0 + k * nkth - 1, ntr0 + (k + 1) * nkth]))
+                    sde_val.sampling = self.sde.sampling.sub_sampling(
+                        from_range=[ntr0 + k * nkth - 1, ntr0 + (k + 1) * nkth])
                     sde_val.set_data(self.sde.data.data.iloc[(ntr0 + k * nkth - 1):(ntr0 + (k + 1) * nkth)])
                 else:
-                    sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(
-                        from_range=[ntr0 + k * nkth - 1, n]))
+                    sde_val.sampling = self.sde.sampling.sub_sampling(from_range=[ntr0 + k * nkth - 1, n])
                     sde_val.set_data(self.sde.data.data.iloc[(ntr0 + k * nkth - 1):])
 
                 # create auxiliary estimator of same type of base est, on training data
@@ -230,7 +234,7 @@ class AdaLasso(SdeLearner):
                             val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
                         elif cv_metric == "mse":
                             lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
-                            n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 1000
+                            n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                             val_loss[i, k] = \
                                 np.mean((lasso_tr.predict(
                                     sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
