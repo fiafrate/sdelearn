@@ -4,7 +4,10 @@ import numpy as np
 
 class SdeLearner:
     def __init__(self, sde):
-
+        """
+        Create a SdeLearner. Do not use this, instantiate specific sublasses instead.
+        :param sde: an object of class Sde
+        """
         # contains SDE
         self.sde = sde
         # contains estimate
@@ -15,7 +18,11 @@ class SdeLearner:
         self.optim_info = {'args': None}
 
     def set_sde(self, sde):
-        # resets the object with new sde (possibly needed in penalized estimation when subclass of base est is not explicitely
+        """
+        resets the object with new sde (possibly needed in penalized estimation when subclass of base est is not explicitely
+        :param sde: Sde object
+        :return:
+        """
         # known
         self.__init__(sde)
         return

@@ -11,6 +11,10 @@ import warnings
 
 class Qmle(SdeLearner):
     def __init__(self, sde):
+        """
+        Create QMLE estimator, a SdeLearner based on quasi-maximum likelihood estimator
+        :param sde: object of class Sde
+        """
         super().__init__(sde)
 
         # # contains qml estimate
