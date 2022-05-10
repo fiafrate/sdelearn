@@ -19,7 +19,7 @@ class SdeLearner:
 
     def set_sde(self, sde):
         """
-        resets the object with new sde (possibly needed in penalized estimation when subclass of base est is not explicitely
+        resets the object with new sde (possibly needed in penalized estimation when subclass of base est is not explicitly
         :param sde: Sde object
         :return:
         """

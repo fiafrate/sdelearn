@@ -176,7 +176,7 @@ class AdaLasso(SdeLearner):
                         n_rep = kwargs['n_rep'] if kwargs['n_rep'] is not None else 1000
                         lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
                         val_loss[i] = \
-                            np.mean(lasso_tr.predict(sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()**2)
+                            np.mean((lasso_tr.predict(sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy())**2)
                 except:
                     pass
 
@@ -230,10 +230,10 @@ class AdaLasso(SdeLearner):
                             val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
                         elif cv_metric == "mse":
                             lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
-                            n_rep = kwargs['n_rep'] if kwargs['n_rep'] is not None else 1000
+                            n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 1000
                             val_loss[i, k] = \
-                                np.mean(lasso_tr.predict(
-                                    sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy() ** 2)
+                                np.mean((lasso_tr.predict(
+                                    sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
                     except:
                         pass
 
