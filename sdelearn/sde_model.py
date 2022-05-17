@@ -67,7 +67,7 @@ class SdeModel:
             # create auxiliary functions for evaluating drift and diff expressions
 
             # b and A take in input arrays
-            self.b = sym.lambdify(self.state_var + self.param, self.b_expr)
+            self.b = sym.lambdify(self.state_var + self.param, sym.Array(self.b_expr))
             self.A = sym.lambdify(self.state_var + self.param, sym.Matrix(self.A_expr))
 
             def drift_wrap(x, param):

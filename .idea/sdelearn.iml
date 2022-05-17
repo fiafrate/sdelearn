@@ -7,7 +7,7 @@
       <excludeFolder url="file://$MODULE_DIR$/tests/local" />
       <excludeFolder url="file://$MODULE_DIR$/build/bdist.linux-x86_64" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.8 (py-uima)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.9 (sdelearn)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

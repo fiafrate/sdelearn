@@ -11,15 +11,17 @@ import warnings
 import copy
 
 
-class AdaLasso(SdeLearner):
-    def __init__(self, sde, base_estimator, weights=None, delta=0, penalty=None, **kwargs):
+class AdaBridge(SdeLearner):
+    def __init__(self, sde, base_estimator, weights=None, q=0.5, delta=0, penalty=None, **kwargs):
         """
 
-        :param sde: an Sde object
+        :param sde: a Sde object
         :param base_estimator: a base estimator of class SdeLearner or a string naming a subclass for constructing one (e.g. Qmle)
         :param weights: adaptive weights/penalties for each parameter, in the form of a dictionary `{param: value}`,
             defaults to None, in that case all weights are set to 1
-        :param delta: adjusts adaptive penalties as w_i / est_i^delta, defaults to zero meaning the adaptive weights
+        :param q: exponent of the lq penalty of the bridge estimator. Either a scalar or an array with same length
+            as the parameter groups in Sde
+        :param delta: adjusts adaptive penalties as w_i / |est_i|^delta, defaults to zero meaning the adaptive weights
         given in argument `weights` remain unchanged
         :param penalty: grid of lambda values at which to evaluate the solution path, defaults to None meaning that
             1000 log-spaced values will be used from 0 to lambda_max
@@ -27,6 +29,7 @@ class AdaLasso(SdeLearner):
         """
         super().__init__(sde=sde)
 
+        self.q = q
         self.base_est = None
         self.ini_est = None
         self.ini_hess = None
@@ -63,7 +66,7 @@ class AdaLasso(SdeLearner):
         # indices of names per group
         self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
         self.group_names = list(self.group_idx.keys())
-        # setup block lipschitiz contants
+        # setup block lipschitz contants
         block_hess = np.array(
             [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()])
         self.block_lip = np.linalg.eigvalsh(block_hess).max(axis=1)
@@ -110,7 +113,7 @@ class AdaLasso(SdeLearner):
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
 
-        out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a, ord=1)
+        out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a, ord =self.q)**self.q
 
         return out
 
@@ -154,8 +157,8 @@ class AdaLasso(SdeLearner):
             # create auxiliary sde objects
             sde_tr = copy.deepcopy(self.sde)
             sde_val = copy.deepcopy(self.sde)
-            #sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(last_n=n_val))
-            #sde_tr = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(first_n=n - n_val + 1))
+            # sde_val = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(last_n=n_val))
+            # sde_tr = Sde(model=self.sde.model, sampling=self.sde.sampling.sub_sampling(first_n=n - n_val + 1))
 
             sde_tr.sampling = self.sde.sampling.sub_sampling(first_n=n - n_val + 1)
             sde_val.sampling = self.sde.sampling.sub_sampling(last_n=n_val)
@@ -165,8 +168,8 @@ class AdaLasso(SdeLearner):
             # create auxiliary estimator of same type of base est, on training data
             aux_est = type(self.base_est)(sde_tr)
             aux_est.fit(start=self.ini_est, **self.base_est.optim_info['args'])
-            lasso_tr = AdaLasso(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
-                                penalty=self.penalty)
+            lasso_tr = AdaBridge(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
+                                 penalty=self.penalty)
             lasso_tr.fit(**kwargs)
 
             # create aux est object on validation data and compute loss
@@ -180,7 +183,8 @@ class AdaLasso(SdeLearner):
                         n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                         lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
                         val_loss[i] = \
-                            np.mean((lasso_tr.predict(sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy())**2)
+                            np.mean((lasso_tr.predict(sampling=sde_val.sampling,
+                                                      n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
                 except:
                     pass
 
@@ -192,7 +196,8 @@ class AdaLasso(SdeLearner):
             # compute final estimate using optimal lambda
             self.lambda_opt = self.penalty[:-1][val_loss < np.nanmin(val_loss) + np.nanstd(val_loss)][-1]
             self.lambda_min = self.penalty[np.nanargmin(val_loss)]
-            self.est = dict(zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
+            self.est = dict(
+                zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
             self.vcov = np.linalg.inv(self.ini_hess)
             self.val_loss = val_loss
 
@@ -221,8 +226,8 @@ class AdaLasso(SdeLearner):
                 # create auxiliary estimator of same type of base est, on training data
                 aux_est = type(self.base_est)(sde_tr)
                 aux_est.fit(start=self.ini_est, **self.base_est.optim_info['args'])
-                lasso_tr = AdaLasso(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
-                                    penalty=self.penalty)
+                lasso_tr = AdaBridge(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
+                                     penalty=self.penalty)
                 lasso_tr.fit(**kwargs)
 
                 # create aux est object on validation data and compute loss
@@ -237,10 +242,10 @@ class AdaLasso(SdeLearner):
                             n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                             val_loss[i, k] = \
                                 np.mean((lasso_tr.predict(
-                                    sampling=sde_val.sampling, n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
+                                    sampling=sde_val.sampling,
+                                    n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
                     except:
                         pass
-
 
             # cv loss
             val_loss[np.isinf(val_loss)] = np.nan
@@ -252,23 +257,25 @@ class AdaLasso(SdeLearner):
             # compute final estimate using optimal lambda
             self.lambda_opt = self.penalty[:-1][cv_loss < np.nanmin(cv_loss) + np.nanstd(val_loss)][-1]
             self.lambda_min = self.penalty[np.nanargmin(cv_loss)]
-            self.est = dict(zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
+            self.est = dict(
+                zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
             self.vcov = np.linalg.inv(self.ini_hess)
             self.val_loss = val_loss
 
         return self
 
-    def soft_threshold(self, par, penalty, padding=None):
-        '''
+    def hard_threshold(self, par, penalty, padding=None):
+        """
         lasso soft-thresholding operator
         :param par: evaluation point
         :param penalty: penalty parameter multiplying adaptive weights in Sde.AdaLasso object
         :param padding: optionally compute soft thresh on a subvector indexed by padding == 1
         :return: vector of component wise soft-thresholding of par
-        '''
+        """
         if padding is None:
             padding = np.ones_like(par)
         w = self.w_ada[padding == 1]
+
         return np.sign(par) * np.maximum(np.abs(par) - penalty * w, 0)
 
     def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1):
@@ -278,7 +285,7 @@ class AdaLasso(SdeLearner):
         s = s_ini
 
         jac_y = self.ini_hess @ (y_curr - par_ini)
-        x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+        x_curr = self.hard_threshold(y_curr - s * jac_y, penalty * s)
 
         g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
         g_2 = 0.5 * (y_curr - par_ini) @ self.ini_hess @ (y_curr - par_ini)
@@ -290,7 +297,7 @@ class AdaLasso(SdeLearner):
 
         while g_1 > qs_12:
             s = gamma * s
-            x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+            x_curr = self.hard_threshold(y_curr - s * jac_y, penalty * s)
             g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
             qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
                     + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
@@ -301,7 +308,7 @@ class AdaLasso(SdeLearner):
                           opt_alg="fista",
                           backtracking=False,
                           **kwargs):
-        '''
+        """
         compute proximal gradient algorithms for regularization path optimization.
         :param x0: array-like starting point
         :param penalty: value penalty parameter
@@ -315,7 +322,7 @@ class AdaLasso(SdeLearner):
         :return: dict 'x': last x point reached, 'f': loss function at x, 'status': convergence status 0/1,
             'message': convergence message, 'niter': number of iterations,\
                 'jac': gradient of f at x, 'epsilon': epsilon}
-        '''
+        """
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
 
@@ -365,7 +372,7 @@ class AdaLasso(SdeLearner):
         # x_curr = np.where(padding == 1, x_soft, x_prev)
         jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
         x_curr = np.copy(x_prev)
-        x_curr[padding == 1] = self.soft_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
+        x_curr[padding == 1] = self.hard_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
 
         while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
 
@@ -384,7 +391,7 @@ class AdaLasso(SdeLearner):
                 #
                 jac_y = self.ini_hess @ (y_curr - par_ini)
                 x_prev = np.copy(x_curr)
-                x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+                x_soft = self.hard_threshold(y_curr - s * jac_y, penalty * s)
                 x_curr = np.where(padding == 1, x_soft, x_prev)
                 if bounds is not None:
                     y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
@@ -418,7 +425,7 @@ class AdaLasso(SdeLearner):
 
                 y_curr = np.copy(x_curr)
                 jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
+                x_curr[padding == 1] = self.hard_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
 
             elif opt_alg == "block_wise":
                 padding = np.zeros_like(x_prev, dtype=int)
@@ -441,7 +448,7 @@ class AdaLasso(SdeLearner):
                     s = s_lip
                 y_curr = np.copy(x_curr)
                 jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
+                x_curr[padding == 1] = self.hard_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
 
             # fix bounds
             if bounds is not None:
@@ -457,7 +464,6 @@ class AdaLasso(SdeLearner):
 
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
                 'jac': jac_y, 'epsilon': epsilon}
-
 
     def plot(self, save_fig=None):
         plt.figure()
