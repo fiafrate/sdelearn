@@ -14,7 +14,7 @@ import copy
 class AdaBridge(SdeLearner):
     def __init__(self, sde, base_estimator, weights=None, q=0.5, delta=0, penalty=None, **kwargs):
         """
-
+        Adaptive bridge estimator. Currently supports one q=1/2.
         :param sde: a Sde object
         :param base_estimator: a base estimator of class SdeLearner or a string naming a subclass for constructing one (e.g. Qmle)
         :param weights: adaptive weights/penalties for each parameter, in the form of a dictionary `{param: value}`,
@@ -78,7 +78,7 @@ class AdaBridge(SdeLearner):
         self.w_ada = np.array(list(self.weights.values())) / \
                      np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
 
-        self.lambda_max = np.linalg.norm(self.ini_hess @ np.array(list(self.ini_est.values())) / self.w_ada, ord=np.inf)
+        self.lambda_max = np.max(np.power(np.abs(2/3*self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)
 
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
@@ -87,7 +87,7 @@ class AdaBridge(SdeLearner):
 
         if penalty is None:
             self.penalty = np.zeros(100)
-            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max), num=99))
+            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max+10), num=99))
             self.penalty[99] = self.lambda_max
         else:
             self.penalty = np.sort(penalty)
@@ -113,7 +113,8 @@ class AdaBridge(SdeLearner):
         par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
 
-        out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a, ord =self.q)**self.q
+        out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a,
+                                                                                                 ord=self.q) ** self.q
 
         return out
 
@@ -264,9 +265,9 @@ class AdaBridge(SdeLearner):
 
         return self
 
-    def hard_threshold(self, par, penalty, padding=None):
+    def hard_threshold(self, par, penalty, q=0.5, padding=None):
         """
-        lasso soft-thresholding operator
+        bridge hard-thresholding operator
         :param par: evaluation point
         :param penalty: penalty parameter multiplying adaptive weights in Sde.AdaLasso object
         :param padding: optionally compute soft thresh on a subvector indexed by padding == 1
@@ -276,7 +277,14 @@ class AdaBridge(SdeLearner):
             padding = np.ones_like(par)
         w = self.w_ada[padding == 1]
 
-        return np.sign(par) * np.maximum(np.abs(par) - penalty * w, 0)
+        if q == 0.5:
+            out = np.zeros_like(par)
+            i_nz = np.abs(par) > 1.5 * np.power(penalty * w, 2 / 3)
+            out[i_nz] = 2 / 3 * par[i_nz] * (1 + np.cos(
+                2 * np.pi / 3 - 2 / 3 * np.arccos(penalty * w[i_nz] / 16 * np.power(np.abs(par[i_nz]) / 3, -1.5))))
+            return out
+        else:
+            return np.ones_like(par)
 
     def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1):
 
@@ -285,7 +293,7 @@ class AdaBridge(SdeLearner):
         s = s_ini
 
         jac_y = self.ini_hess @ (y_curr - par_ini)
-        x_curr = self.hard_threshold(y_curr - s * jac_y, penalty * s)
+        x_curr = self.hard_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
 
         g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
         g_2 = 0.5 * (y_curr - par_ini) @ self.ini_hess @ (y_curr - par_ini)
@@ -297,7 +305,7 @@ class AdaBridge(SdeLearner):
 
         while g_1 > qs_12:
             s = gamma * s
-            x_curr = self.hard_threshold(y_curr - s * jac_y, penalty * s)
+            x_curr = self.hard_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
             g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
             qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
                     + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
@@ -372,7 +380,7 @@ class AdaBridge(SdeLearner):
         # x_curr = np.where(padding == 1, x_soft, x_prev)
         jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
         x_curr = np.copy(x_prev)
-        x_curr[padding == 1] = self.hard_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
+        x_curr[padding == 1] = self.hard_threshold(par=x_prev[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
         while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
 
@@ -391,7 +399,7 @@ class AdaBridge(SdeLearner):
                 #
                 jac_y = self.ini_hess @ (y_curr - par_ini)
                 x_prev = np.copy(x_curr)
-                x_soft = self.hard_threshold(y_curr - s * jac_y, penalty * s)
+                x_soft = self.hard_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
                 x_curr = np.where(padding == 1, x_soft, x_prev)
                 if bounds is not None:
                     y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
@@ -425,7 +433,7 @@ class AdaBridge(SdeLearner):
 
                 y_curr = np.copy(x_curr)
                 jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.hard_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
+                x_curr[padding == 1] = self.hard_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
             elif opt_alg == "block_wise":
                 padding = np.zeros_like(x_prev, dtype=int)
@@ -448,7 +456,7 @@ class AdaBridge(SdeLearner):
                     s = s_lip
                 y_curr = np.copy(x_curr)
                 jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.hard_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
+                x_curr[padding == 1] = self.hard_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
             # fix bounds
             if bounds is not None:

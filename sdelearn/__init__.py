@@ -7,4 +7,5 @@ from .sde_data import SdeData
 from .sde_learner import SdeLearner
 from .sde_qmle import Qmle
 from .sde_lasso import AdaLasso
+from .sde_bridge import AdaBridge
 
