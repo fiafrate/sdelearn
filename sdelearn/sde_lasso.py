@@ -12,7 +12,7 @@ import copy
 
 
 class AdaLasso(SdeLearner):
-    def __init__(self, sde, base_estimator, weights=None, delta=0, penalty=None, **kwargs):
+    def __init__(self, sde, base_estimator, weights=None, delta=0, penalty=None, n_pen=100, **kwargs):
         """
 
         :param sde: an Sde object
@@ -21,9 +21,10 @@ class AdaLasso(SdeLearner):
             defaults to None, in that case all weights are set to 1
         :param delta: adjusts adaptive penalties as w_i / est_i^delta, defaults to zero meaning the adaptive weights
         given in argument `weights` remain unchanged
-        :param penalty: grid of lambda values at which to evaluate the solution path, defaults to None meaning that
-            1000 log-spaced values will be used from 0 to lambda_max
-        :**kwargs: arguments to be passed to fit method of base estimator if not already fitted
+        :param penalty: grid of lambda values at which to evaluate the solution path which must include 0, defaults to None meaning that
+            100 log-spaced values will be used from 0 to lambda_max
+        :param n_pen: number of penalty values to consider (ignored if a penalty vector is supplied)
+        :**kwargs: arguments to be passed to fit method of base estimator if not already fitted, or options for thresholding algorithms
         """
         super().__init__(sde=sde)
 
@@ -83,10 +84,11 @@ class AdaLasso(SdeLearner):
         self.lambda_min = None
 
         if penalty is None:
-            self.penalty = np.zeros(100)
-            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max), num=99))
-            self.penalty[99] = self.lambda_max
+            self.penalty = np.zeros(n_pen)
+            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max), num=n_pen-1))
+            self.penalty[n_pen-1] = self.lambda_max
         else:
+            n_pen = len(penalty)
             self.penalty = np.sort(penalty)
 
         # initialize solution path

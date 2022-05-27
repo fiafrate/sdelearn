@@ -77,7 +77,7 @@ b_expr = np.array([theta_dr[2*i] - theta_dr[2*i+1] * state_var[i] for i in range
 A_expr = np.full((n_var,n_var), sym.sympify('0'))
 np.fill_diagonal(A_expr, [theta_di[2*i] + theta_di[2*i+1] * state_var[i] for i in range(n_var)])
 
-sde = Sde(sampling=SdeSampling(initial=0, terminal=20, delta=0.01),
+sde = Sde(sampling=SdeSampling(initial=0, terminal=20, delta=0.001),
           model=SdeModel(b_expr, A_expr, state_var=[s.name for s in state_var]))
 print(sde)
 
