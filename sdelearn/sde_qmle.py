@@ -145,7 +145,10 @@ class Qmle(SdeLearner):
                     1])
 
         if self.sde.model.mode == 'sym':
-            self.update_aux(param, batch_id)
+            try:
+                self.update_aux(param, batch_id)
+            except np.linalg.LinAlgError:
+                return np.finfo(float).max
             out = 0.5 * np.sum(
                 np.matmul(self.DXS_inv,
                           (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2,
@@ -186,7 +189,10 @@ class Qmle(SdeLearner):
 
         dn = self.sde.sampling.delta
 
-        self.update_aux(param, batch_id)
+        try:
+            self.update_aux(param, batch_id)
+        except np.linalg.LinAlgError:
+            return np.full(shape=len(self.sde.model.param), fill_value=np.finfo(float).max)
 
         # Jbs = np.array([self.model.der_foo["Jb"](*x, **param) for x in self.X[:-1]])
         Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
@@ -210,7 +216,10 @@ class Qmle(SdeLearner):
 
         assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
 
-        self.update_aux(param, batch_id)
+        try:
+            self.update_aux(param, batch_id)
+        except np.linalg.LinAlgError:
+            return np.diag(np.full(shape=len(self.sde.model.param), fill_value=np.finfo(float).resolution))
 
         dn = self.sde.sampling.delta
 

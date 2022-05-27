@@ -23,7 +23,7 @@ class AdaLasso(SdeLearner):
         given in argument `weights` remain unchanged
         :param penalty: grid of lambda values at which to evaluate the solution path which must include 0, defaults to None meaning that
             100 log-spaced values will be used from 0 to lambda_max
-        :param n_pen: number of penalty values to consider (ignored if a penalty vector is supplied)
+        :param n_pen: number of penalty values to consider (counting 0, ignored if a penalty vector is supplied)
         :**kwargs: arguments to be passed to fit method of base estimator if not already fitted, or options for thresholding algorithms
         """
         super().__init__(sde=sde)
