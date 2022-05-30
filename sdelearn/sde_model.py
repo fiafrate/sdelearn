@@ -48,8 +48,8 @@ class SdeModel:
             self.null_expr = sym.Mul(sym.symbols(self.state_var[0]), 0, evaluate=False)
 
             # convert list expressions into numpy arrays
-            self.b_expr = np.array([v + self.null_expr if v.is_constant() else v for v in drift])
-            self.A_expr = np.array([[v + self.null_expr if v.is_constant() else v for v in row] for row in diff])
+            self.b_expr = np.array([v + self.null_expr for v in drift])
+            self.A_expr = np.array([[v + self.null_expr for v in row] for row in diff])
             self.S_expr = self.A_expr @ self.A_expr.transpose()
             self.S_expr = np.array([[v + self.null_expr for v in row] for row in self.S_expr])
             # infer parameter names

@@ -328,9 +328,12 @@ class AdaLasso(SdeLearner):
         x_prev = np.array(x0)
         y_curr = np.copy(x_prev)
 
+        # fix bounds
         if bounds is not None:
-            bounds = np.array(bounds).transpose()
-            assert np.all(y_curr > bounds[0]) and np.all(y_curr < bounds[1]), 'starting point outside of bounds'
+            bounds = bounds.transpose()
+            y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
+            y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
+
 
         padding = np.ones_like(par_ini)
 
