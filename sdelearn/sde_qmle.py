@@ -37,10 +37,21 @@ class Qmle(SdeLearner):
         self.group_change = False
 
     # method either AGD for nesterov otherwise passed on to scipy.optimize, only valid for symbolic mode
-    def fit(self, start, method="BFGS", two_step=False, **kwargs):
+    def fit(self, start, method="BFGS", two_step=False, hess_exact=False, **kwargs):
+        """
 
+        :param start: optimization starting point
+        :param method: optimization method to use: wither AGD for accelerated gradient descent (experimental)
+            or any method supported by scipy.optimize
+        :param two_step: boolean, whether to perform two step optimization (diffusion first, then drift) as in
+        Yoshida, Nakahiro. "Quasi-likelihood analysis and its applications." Statistical Inference for Stochastic Processes 25.1 (2022): 43-60.
+        :param hess_exact: use exact computation of the hessian (only in symbolic mode) or use approximation returned by
+        scipy.optimize
+        :param kwargs: additional parameters passed over to optimizers
+        :return: self, after updating self.optim_info, self.est, self.vcov
+        """
         # catch args
-        self.optim_info['args'] = {'method': method, **kwargs}
+        self.optim_info['args'] = {'method': method, 'two_step': two_step, **kwargs}
         # fix bounds and start order - bounds are assumed to have same order as start!
         if kwargs.get('bounds') is not None:
             bounds = kwargs.get('bounds')
@@ -53,14 +64,16 @@ class Qmle(SdeLearner):
             res = optimize.minimize(fun=self.loss_wrap, x0=np.array(list(start.values())), args=(self), method=method,
                                     **kwargs)
             self.est = dict(zip(self.sde.model.param, res.x))
-            if method == 'BFGS':
+
+            if isinstance(res.hess_inv, np.ndarray):
                 self.vcov = res.hess_inv
-            elif method == 'L-BFGS-B':
-                self.vcov = res.hess_inv.todense()
+                self.optim_info['hess'] = np.linalg.inv(res.hess_inv)
             else:
-                self.vcov = np.linalg.inv(self.hessian(self.est))
+                self.vcov = res.hess_inv.todense()
+                self.optim_info['hess'] = np.linalg.inv(self.vcov)
 
             self.optim_info['res'] = res
+
             return self
 
         if self.sde.model.mode == 'sym':
@@ -70,15 +83,18 @@ class Qmle(SdeLearner):
                 # bounds=kwargs.get('bounds'),
                 # cyclic=False if kwargs.get('cyclic') is None else kwargs.get('cyclic'),
                 # sde_learn=self)
-                self.est = dict(zip(self.sde.model.param, res['x']))
-                self.vcov = np.linalg.inv(self.hessian(self.est))
+
                 self.optim_info['res'] = res
+                self.optim_info['hess'] = self.hessian(self.est)
+
+                self.est = dict(zip(self.sde.model.param, res['x']))
+                self.vcov = np.linalg.inv(self.optim_info['hess'])
+
                 return self
 
             if method != 'AGD':
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
                 if two_step:
-
                     # optimize wrt beta -----------------------------------------------
                     # fix bounds
                     kwargs2 = kwargs.copy()
@@ -113,23 +129,44 @@ class Qmle(SdeLearner):
                                           jac=Qmle.grad_wrap2,
                                           **kwargs2)
                     self.est = dict(zip(self.sde.model.param, np.concatenate((res_alpha.x, res_beta.x))))
-                    self.vcov = np.linalg.inv(self.hessian(self.est))
+
                     self.optim_info['res_alpha'] = res_alpha
-                    self.optim_info['res_beta'] = res_alpha
+                    self.optim_info['res_beta'] = res_beta
+
+                    # compute and save hessian and vcov, either exact or approx
+                    if hess_exact:
+                        self.optim_info["hess"] = self.hessian(self.est)
+                        self.vcov = np.linalg.inv(self.optim_info["hess"])
+                    else:
+                        if isinstance(res_alpha.hess_inv, np.ndarray):
+                            self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                                                  [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]])
+                        else:
+                            self.vcov = self.vcov = np.block([[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                                                  [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]])
+
+                        self.optim_info['hess'] = np.linalg.inv(self.vcov)
+
 
                 else:
                     res = optimize.minimize(fun=self.loss_wrap, x0=np.array(list(start.values())), args=(self),
                                             method=method,
                                             jac=Qmle.grad_wrap, hess=Qmle.hess_wrap, **kwargs)
                     self.est = dict(zip(self.sde.model.param, res.x))
-                    if method == 'BFGS':
-                        self.vcov = res.hess_inv
-                    elif method == 'L-BFGS-B':
-                        self.vcov = res.hess_inv.todense()
+
+                    if hess_exact:
+                        self.optim_info["hess"] = self.hessian(self.est)
+                        self.vcov = np.linalg.inv(self.optim_info["hess"])
                     else:
-                        self.vcov = np.linalg.inv(self.hessian(self.est))
+                        if isinstance(res.hess_inv, np.ndarray):
+                            self.vcov = res.hess_inv
+                        else:
+                            self.vcov = res.hess_inv.todense()
+                        self.optim_info['hess'] = np.linalg.inv(self.vcov)
+
                     self.optim_info['res'] = res
-                    return self
+
+                return self
 
     # @staticmethod
     # def qmle(sde, start, upper=None, lower=None):
@@ -341,7 +378,7 @@ class Qmle(SdeLearner):
 
     def hessian(self, param, batch_id=None, **kwargs):
 
-        assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
+        assert self.sde.model.mode == 'sym', 'Hessian computation available only in symbolic mode'
 
         try:
             self.update_aux(param, batch_id)
@@ -376,7 +413,7 @@ class Qmle(SdeLearner):
 
         HESSB3 = np.einsum('nd, npqde, ne -> npq', self.DXS_inv[:, 0, :], HESSB3c, self.DXS_inv[:, 0, :])
 
-        hess_beta = - HESSB1 + HESSB2 - 1 / dn * HESSB3
+        hess_beta = - HESSB1 + HESSB2 + 1 / dn * HESSB3
         # make sure result is symmetric
         hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
         hess_ab = -2* np.sum(np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)

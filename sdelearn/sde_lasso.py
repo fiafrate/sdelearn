@@ -47,12 +47,13 @@ class AdaLasso(SdeLearner):
             self.ini_est = self.base_est.est
 
         # extract hessian matrix at max point
-        self.ini_hess0 = np.linalg.inv(self.base_est.vcov)
+        self.ini_hess0 = self.base_est.optim_info['hess']
         # fix hessian matrix if not symmetric positive definite
         self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
         v, a = np.linalg.eigh(self.ini_hess0)
         # set to zero negative eigs + some small noise
-        v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+        #v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+        v[v < 0] = np.abs(v[v < 0])
         # lipschitz constant of quadratic part
         self.lip = np.max(v)
         self.ini_hess = a @ np.diag(v) @ a.transpose()

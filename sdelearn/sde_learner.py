@@ -14,8 +14,9 @@ class SdeLearner:
         self.est = None
         # contains var cov matrix
         self.vcov = None
-        # contains info about optimization
-        self.optim_info = {'args': None}
+        # contains info about optimization, assumed to contain at least the following fields,
+        # especially hess, which is used in adalasso
+        self.optim_info = {'args': None, 'hess': None, 'res': None}
 
     def set_sde(self, sde):
         """
