@@ -34,10 +34,10 @@ class Qmle(SdeLearner):
         # auxiliary value of param: latest value at which derivatives were updated (avoids repetitions)
         self.aux_par = None
         self.batch_id = np.arange(self.sde.data.n_obs - 1)
-
+        self.group_change = False
 
     # method either AGD for nesterov otherwise passed on to scipy.optimize, only valid for symbolic mode
-    def fit(self, start, method="BFGS", **kwargs):
+    def fit(self, start, method="BFGS", two_step=False, **kwargs):
 
         # catch args
         self.optim_info['args'] = {'method': method, **kwargs}
@@ -77,18 +77,59 @@ class Qmle(SdeLearner):
 
             if method != 'AGD':
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
-                res = optimize.minimize(fun=self.loss_wrap, x0=np.array(list(start.values())), args=(self),
-                                        method=method,
-                                        jac=Qmle.grad_wrap, hess=Qmle.hess_wrap, **kwargs)
-                self.est = dict(zip(self.sde.model.param, res.x))
-                if method == 'BFGS':
-                    self.vcov = res.hess_inv
-                elif method == 'L-BFGS-B':
-                    self.vcov = res.hess_inv.todense()
-                else:
+                if two_step:
+
+                    # optimize wrt beta -----------------------------------------------
+                    # fix bounds
+                    kwargs2 = kwargs.copy()
+                    if kwargs2.get("bounds") is not None:
+                        bounds_id = [list(start.keys()).index(p) for p in self.sde.model.diff_par]
+                        kwargs2["bounds"] = [kwargs2.get("bounds")[i] for i in bounds_id]
+
+                    x_start = np.array([start.get(k) for k in self.sde.model.diff_par])
+                    group_ini = np.array([start.get(k) for k in self.sde.model.drift_par])
+                    res_beta = \
+                        optimize.minimize(fun=self.loss_wrap2,
+                                          x0=x_start,
+                                          args=(self, "beta", group_ini),
+                                          method=method,
+                                          jac=Qmle.grad_wrap2,
+                                          **kwargs2)
+
+                    # optimize wrt alpha --------------------------------------------------------
+                    # fix bounds
+                    kwargs2 = kwargs.copy()
+                    if kwargs2.get("bounds") is not None:
+                        bounds_id = [list(start.keys()).index(p) for p in self.sde.model.drift_par]
+                        kwargs2["bounds"] = [kwargs2.get("bounds")[i] for i in bounds_id]
+
+                    x_start = np.array([start.get(k) for k in self.sde.model.drift_par])
+                    group_ini = np.array(res_beta.x)
+                    res_alpha = \
+                        optimize.minimize(fun=self.loss_wrap2,
+                                          x0=x_start,
+                                          args=(self, "alpha", group_ini),
+                                          method=method,
+                                          jac=Qmle.grad_wrap2,
+                                          **kwargs2)
+                    self.est = dict(zip(self.sde.model.param, np.concatenate((res_alpha.x, res_beta.x))))
                     self.vcov = np.linalg.inv(self.hessian(self.est))
-                self.optim_info['res'] = res
-                return self
+                    self.optim_info['res_alpha'] = res_alpha
+                    self.optim_info['res_beta'] = res_alpha
+
+                else:
+                    res = optimize.minimize(fun=self.loss_wrap, x0=np.array(list(start.values())), args=(self),
+                                            method=method,
+                                            jac=Qmle.grad_wrap, hess=Qmle.hess_wrap, **kwargs)
+                    self.est = dict(zip(self.sde.model.param, res.x))
+                    if method == 'BFGS':
+                        self.vcov = res.hess_inv
+                    elif method == 'L-BFGS-B':
+                        self.vcov = res.hess_inv.todense()
+                    else:
+                        self.vcov = np.linalg.inv(self.hessian(self.est))
+                    self.optim_info['res'] = res
+                    return self
 
     # @staticmethod
     # def qmle(sde, start, upper=None, lower=None):
@@ -157,6 +198,25 @@ class Qmle(SdeLearner):
 
         return out
 
+    def loss2(self, param, group, batch_id=None, **kwargs):
+        out = 0
+
+        try:
+            self.update_aux(param, batch_id)
+        except np.linalg.LinAlgError:
+            return np.finfo(float).max
+
+        if group == "alpha":
+            out = 0.5 * np.sum(
+            np.matmul(self.DXS_inv, (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2, 1)).squeeze() * 1 / self.sde.sampling.delta) * 1 / len(self.batch_id)
+
+        if group == "beta":
+            out = 0.5 * np.sum(
+                np.matmul(np.matmul(self.DX[self.batch_id], self.Ss_inv),
+                          (self.DX[self.batch_id]).transpose(0, 2, 1)).squeeze() * 1 / self.sde.sampling.delta
+                + np.linalg.slogdet(self.Ss)[1]) * 1 / len(self.batch_id)
+
+        return out
     # update the auxiliary matrices
     def update_aux(self, param, batch_id=None):
         # skip if derivatives are already updated with this parameter
@@ -181,6 +241,32 @@ class Qmle(SdeLearner):
 
         return
 
+    def update_aux2(self, param, group, batch_id=None):
+        # skip if derivatives are already updated with this parameter
+        if param == self.aux_par and self.group_change:
+            self.group_change = True
+            return
+
+        self.aux_par = param
+        if batch_id is not None:
+            self.batch_id = batch_id
+        else:
+            self.batch_id = np.arange(self.sde.data.n_obs - 1)
+
+
+        if group == "alpha":
+            self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
+            self.bs = np.swapaxes(self.sde.model.der_foo["b"](*self.X[self.batch_id].transpose(), **param), 0, -1)
+            self.Ss_inv = np.linalg.inv(self.Ss)
+            self.DXS_inv = np.matmul(self.DX[self.batch_id] - self.sde.sampling.delta * self.bs, self.Ss_inv)
+
+        if group == "beta":
+            self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
+            self.Ss_inv = np.linalg.inv(self.Ss)
+
+        return
+
+
     # compute the gradient of the quasi-lik at point par for a given sde object
 
     def gradient(self, param, batch_id=None):
@@ -192,7 +278,7 @@ class Qmle(SdeLearner):
         try:
             self.update_aux(param, batch_id)
         except np.linalg.LinAlgError:
-            return np.full(shape=len(self.sde.model.param), fill_value=np.finfo(float).max)
+            return 10*np.random.randn(len(self.sde.model.param))
 
         # Jbs = np.array([self.model.der_foo["Jb"](*x, **param) for x in self.X[:-1]])
         Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
@@ -209,6 +295,47 @@ class Qmle(SdeLearner):
         grad_beta = grad_beta1 + grad_beta2
 
         return 0.5 * np.concatenate([np.sum(grad_alpha, axis=0), np.sum(grad_beta, axis=0)]) * 1 / len(self.batch_id)
+
+    def gradient2(self, param, group, batch_id=None):
+        """
+
+        :param param: param dict a which to evaluate the gradient
+        :param group: gradient for drift or diffusion part separately
+        :param batch_id: internally used for stochastic GD
+        :return: gradient with respect to drift or diffusion parameter separately
+        """
+
+        #assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
+
+        dn = self.sde.sampling.delta
+
+        if group == "alpha":
+            try:
+                self.update_aux2(param, "alpha", batch_id)
+            except np.linalg.LinAlgError:
+                return 10 * np.random.randn(len(self.sde.model.drift_par))
+
+            Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
+
+            grad_alpha = -2 * np.matmul(self.DXS_inv, Jbs)[:, 0, :]
+            return 0.5 * np.sum(grad_alpha, axis=0) * 1 / (self.sde.data.n_obs - 1)
+
+        if group == "beta":
+            try:
+                self.update_aux2(param, "beta", batch_id)
+            except np.linalg.LinAlgError:
+                return 10 * np.random.randn(len(self.sde.model.diff_par))
+
+            DSs = np.moveaxis(self.sde.model.der_foo["DS"](*self.X[self.batch_id].transpose(), **param), -1, 0)
+            GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
+            grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
+            GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
+            grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
+                                             np.einsum('nd, npde -> npe', (self.DX[self.batch_id])[:, 0, :], GB2a),
+                                             (self.DX[self.batch_id])[:, 0, :])
+            grad_beta = grad_beta1 + grad_beta2
+
+            return 0.5 * np.sum(grad_beta, axis=0) * 1 / (self.sde.data.n_obs - 1)
 
     # compute the hessian of the quasi-lik at point par for a given sde object
 
@@ -257,3 +384,32 @@ class Qmle(SdeLearner):
         hess = 0.5*np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
         return hess
 
+    @staticmethod
+    def loss_wrap2(par, sde_learn, group, group_ini, **kwargs):
+        """
+        wrapping function for optimizers
+        :param par:
+        :param sde_learn:
+        :return:
+        """
+        if group == "alpha":
+            par = np.concatenate((par, group_ini))
+        if group == "beta":
+            par = np.concatenate((group_ini, par))
+        param = dict(zip(sde_learn.sde.model.param, par))
+        return sde_learn.loss2(param=param, group=group, **kwargs)
+
+    @staticmethod
+    def grad_wrap2(par, sde_learn, group, group_ini, **kwargs):
+        """
+       wrapping function for optimizers
+       :param par:
+       :param sde_learn:
+       :return:
+       """
+        if group == "alpha":
+            par = np.concatenate((par, group_ini))
+        if group == "beta":
+            par = np.concatenate((group_ini, par))
+        param = dict(zip(sde_learn.sde.model.param, par))
+        return sde_learn.gradient2(param=param, group=group, **kwargs)
