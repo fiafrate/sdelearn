@@ -34,7 +34,6 @@ class Qmle(SdeLearner):
         # auxiliary value of param: latest value at which derivatives were updated (avoids repetitions)
         self.aux_par = None
         self.batch_id = np.arange(self.sde.data.n_obs - 1)
-        self.group_change = False
 
     # method either AGD for nesterov otherwise passed on to scipy.optimize, only valid for symbolic mode
     def fit(self, start, method="BFGS", two_step=False, hess_exact=False, **kwargs):
@@ -280,8 +279,8 @@ class Qmle(SdeLearner):
 
     def update_aux2(self, param, group, batch_id=None):
         # skip if derivatives are already updated with this parameter
-        if param == self.aux_par and self.group_change:
-            self.group_change = True
+
+        if param == self.aux_par:
             return
 
         self.aux_par = param

@@ -392,9 +392,7 @@ class AdaLasso(SdeLearner):
                 x_prev = np.copy(x_curr)
                 x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
                 x_curr = np.where(padding == 1, x_soft, x_prev)
-                if bounds is not None:
-                    y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
-                    y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
+
                 t_prev = t_curr
 
             elif opt_alg == "cyclic":
@@ -458,7 +456,7 @@ class AdaLasso(SdeLearner):
             message = 'Maximum number of iterations reached'
             status = 1
         else:
-            message = 'Success: gradient norm less than epsilon'
+            message = 'Success: relative gradient norm less than epsilon'
             status = 0
 
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
