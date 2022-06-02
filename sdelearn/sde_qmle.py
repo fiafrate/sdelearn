@@ -33,6 +33,7 @@ class Qmle(SdeLearner):
         self.DXS_inv = None
         # auxiliary value of param: latest value at which derivatives were updated (avoids repetitions)
         self.aux_par = None
+        self.faulty_par = False
         self.batch_id = np.arange(self.sde.data.n_obs - 1)
 
     # method either AGD for nesterov otherwise passed on to scipy.optimize, only valid for symbolic mode
@@ -113,6 +114,7 @@ class Qmle(SdeLearner):
 
                     # optimize wrt alpha --------------------------------------------------------
                     # fix bounds
+                    self.aux_par = None
                     kwargs2 = kwargs.copy()
                     if kwargs2.get("bounds") is not None:
                         bounds_id = [list(start.keys()).index(p) for p in self.sde.model.drift_par]
@@ -141,8 +143,9 @@ class Qmle(SdeLearner):
                             self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
                                                   [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]])
                         else:
-                            self.vcov = self.vcov = np.block([[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                                  [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]])
+                            self.vcov = self.vcov = np.block(
+                                [[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                                 [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]])
 
                         self.optim_info['hess'] = np.linalg.inv(self.vcov)
 
@@ -225,12 +228,15 @@ class Qmle(SdeLearner):
             try:
                 self.update_aux(param, batch_id)
             except np.linalg.LinAlgError:
-                return np.finfo(float).max
+                return (np.random.rand() + 1) * self.X.shape[0] ** 2
+
+            log_dets = np.linalg.slogdet(self.Ss)
+            log_det = np.where(log_dets[0] != 0, log_dets[1], np.zeros_like(log_dets[1]))
             out = 0.5 * np.sum(
                 np.matmul(self.DXS_inv,
                           (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2,
-                                                                                  1)).squeeze() * 1 / self.sde.sampling.delta
-                + np.linalg.slogdet(self.Ss)[1]) * 1 / len(self.batch_id)
+                                                                                                 1)).squeeze() * 1 / self.sde.sampling.delta
+                + log_det) * 1 / len(self.batch_id)
 
         return out
 
@@ -238,26 +244,35 @@ class Qmle(SdeLearner):
         out = 0
 
         try:
-            self.update_aux(param, batch_id)
+            self.update_aux2(param, group, batch_id)
         except np.linalg.LinAlgError:
-            return np.finfo(float).max
+            return (np.random.rand() + 1) * self.X.shape[0] **2
 
         if group == "alpha":
             out = 0.5 * np.sum(
-            np.matmul(self.DXS_inv, (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2, 1)).squeeze() * 1 / self.sde.sampling.delta) * 1 / len(self.batch_id)
+                np.matmul(self.DXS_inv, (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2,
+                                                                                                               1)).squeeze() * 1 / self.sde.sampling.delta) * 1 / len(
+                self.batch_id)
 
         if group == "beta":
+            log_dets = np.linalg.slogdet(self.Ss)
+            log_det = np.where(log_dets[0] != 0, log_dets[1], np.zeros_like(log_dets[1]))
+
             out = 0.5 * np.sum(
                 np.matmul(np.matmul(self.DX[self.batch_id], self.Ss_inv),
                           (self.DX[self.batch_id]).transpose(0, 2, 1)).squeeze() * 1 / self.sde.sampling.delta
-                + np.linalg.slogdet(self.Ss)[1]) * 1 / len(self.batch_id)
+                + log_det) * 1 / len(self.batch_id)
 
         return out
+
     # update the auxiliary matrices
     def update_aux(self, param, batch_id=None):
         # skip if derivatives are already updated with this parameter
         if param == self.aux_par:
-            return
+            if self.faulty_par:
+                raise np.linalg.LinAlgError
+            else:
+                return
 
         self.aux_par = param
         if batch_id is not None:
@@ -265,23 +280,33 @@ class Qmle(SdeLearner):
         else:
             self.batch_id = np.arange(self.sde.data.n_obs - 1)
 
-
         self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
+        idx_inv = np.linalg.det(self.Ss) != 0
+        if not np.any(idx_inv):
+            self.faulty_par = True
+            raise np.linalg.LinAlgError
+
+        self.Ss_inv = np.zeros_like(self.Ss)
+        self.Ss_inv[idx_inv] = np.linalg.inv(self.Ss[idx_inv])
+
         self.bs = np.swapaxes(self.sde.model.der_foo["b"](*self.X[self.batch_id].transpose(), **param), 0, -1)
 
         # self.Ss = np.array([self.model.der_foo["S"](*x, **param) for x in self.X[:-1]])
         # self.bs = np.array([self.model.der_foo["b"](*x, **param) for x in self.X[:-1]]).reshape(
         #     (self.X.shape[0] - 1, 1, self.X.shape[1]))
-        self.Ss_inv = np.linalg.inv(self.Ss)
         self.DXS_inv = np.matmul(self.DX[self.batch_id] - self.sde.sampling.delta * self.bs, self.Ss_inv)
 
+        self.faulty_par = False
         return
 
     def update_aux2(self, param, group, batch_id=None):
         # skip if derivatives are already updated with this parameter
 
         if param == self.aux_par:
-            return
+            if self.faulty_par:
+                raise np.linalg.LinAlgError
+            else:
+                return
 
         self.aux_par = param
         if batch_id is not None:
@@ -289,19 +314,24 @@ class Qmle(SdeLearner):
         else:
             self.batch_id = np.arange(self.sde.data.n_obs - 1)
 
+        # required in all cases
+        self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
+        self.Ss_inv = np.zeros_like(self.Ss)
+        idx_inv = np.linalg.det(self.Ss) != 0
+        if not np.any(idx_inv):
+            self.faulty_par = True
+            raise np.linalg.LinAlgError
+
+
+        self.Ss_inv[idx_inv] = np.linalg.inv(self.Ss[idx_inv])
 
         if group == "alpha":
-            self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
+            # required only for drift estimation
             self.bs = np.swapaxes(self.sde.model.der_foo["b"](*self.X[self.batch_id].transpose(), **param), 0, -1)
-            self.Ss_inv = np.linalg.inv(self.Ss)
             self.DXS_inv = np.matmul(self.DX[self.batch_id] - self.sde.sampling.delta * self.bs, self.Ss_inv)
 
-        if group == "beta":
-            self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
-            self.Ss_inv = np.linalg.inv(self.Ss)
-
+        self.faulty_par = False
         return
-
 
     # compute the gradient of the quasi-lik at point par for a given sde object
 
@@ -314,7 +344,7 @@ class Qmle(SdeLearner):
         try:
             self.update_aux(param, batch_id)
         except np.linalg.LinAlgError:
-            return 10*np.random.randn(len(self.sde.model.param))
+            return 10 * np.random.randn(len(self.sde.model.param))
 
         # Jbs = np.array([self.model.der_foo["Jb"](*x, **param) for x in self.X[:-1]])
         Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
@@ -326,7 +356,8 @@ class Qmle(SdeLearner):
         grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
         GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
         grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
-                                         np.einsum('nd, npde -> npe', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a),
+                                         np.einsum('nd, npde -> npe', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :],
+                                                   GB2a),
                                          (self.DX[self.batch_id] - dn * self.bs)[:, 0, :])
         grad_beta = grad_beta1 + grad_beta2
 
@@ -341,7 +372,7 @@ class Qmle(SdeLearner):
         :return: gradient with respect to drift or diffusion parameter separately
         """
 
-        #assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
+        # assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
 
         dn = self.sde.sampling.delta
 
@@ -382,6 +413,7 @@ class Qmle(SdeLearner):
         try:
             self.update_aux(param, batch_id)
         except np.linalg.LinAlgError:
+            self.faulty_par = True
             return np.diag(np.full(shape=len(self.sde.model.param), fill_value=np.finfo(float).resolution))
 
         dn = self.sde.sampling.delta
@@ -415,9 +447,10 @@ class Qmle(SdeLearner):
         hess_beta = - HESSB1 + HESSB2 + 1 / dn * HESSB3
         # make sure result is symmetric
         hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
-        hess_ab = -2* np.sum(np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)
+        hess_ab = -2 * np.sum(
+            np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)
 
-        hess = 0.5*np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
+        hess = 0.5 * np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
         return hess
 
     @staticmethod
