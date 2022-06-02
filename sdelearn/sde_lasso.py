@@ -66,9 +66,8 @@ class AdaLasso(SdeLearner):
         self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
         self.group_names = list(self.group_idx.keys())
         # setup block lipschitiz contants
-        block_hess = np.array(
-            [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()])
-        self.block_lip = np.linalg.eigvalsh(block_hess).max(axis=1)
+        block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
+        self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
 
         # setup weights
         self.delta = delta

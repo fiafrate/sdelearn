@@ -134,6 +134,9 @@ class Qmle(SdeLearner):
                     self.optim_info['res_alpha'] = res_alpha
                     self.optim_info['res_beta'] = res_beta
 
+                    if self.faulty_par:
+                        warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
+
                     # compute and save hessian and vcov, either exact or approx
                     if hess_exact:
                         self.optim_info["hess"] = self.hessian(self.est)
@@ -167,6 +170,9 @@ class Qmle(SdeLearner):
                         self.optim_info['hess'] = np.linalg.inv(self.vcov)
 
                     self.optim_info['res'] = res
+                    if self.faulty_par:
+                        warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
+
 
                 return self
 
@@ -413,7 +419,6 @@ class Qmle(SdeLearner):
         try:
             self.update_aux(param, batch_id)
         except np.linalg.LinAlgError:
-            self.faulty_par = True
             return np.diag(np.full(shape=len(self.sde.model.param), fill_value=np.finfo(float).resolution))
 
         dn = self.sde.sampling.delta
