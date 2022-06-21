@@ -55,7 +55,7 @@ class AdaBridge(SdeLearner):
         self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
         v, a = np.linalg.eigh(self.ini_hess0)
         # set to zero negative eigs + some small noise
-        #v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+        # v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
         v[v < 0] = np.abs(v[v < 0])
         # lipschitz constant of quadratic part
         self.lip = np.max(v)
@@ -69,9 +69,8 @@ class AdaBridge(SdeLearner):
         self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
         self.group_names = list(self.group_idx.keys())
         # setup block lipschitz contants
-        block_hess = np.array(
-            [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()])
-        self.block_lip = np.linalg.eigvalsh(block_hess).max(axis=1)
+        block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
+        self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
 
         # setup weights
         self.delta = delta
@@ -286,8 +285,10 @@ class AdaBridge(SdeLearner):
             i_nz = np.abs(par) > 1.5 * np.power(penalty * w, 2 / 3)
             out[i_nz] = 2 / 3 * par[i_nz] * \
                         (1 + np.cos(2 / 3 * np.arccos(-penalty * w[i_nz] / 4 * np.power(np.abs(par[i_nz]) / 3, -1.5))))
+            out[padding == 0] = 0
             return out
         else:
+            # placeholder for future updates to general q-thresholding
             return np.ones_like(par)
 
     def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1):
@@ -413,7 +414,8 @@ class AdaBridge(SdeLearner):
                 v_curr = self.hard_threshold(par=x_curr - s * jac_x, penalty=penalty * s)
 
                 x_prev = np.copy(x_curr)
-                if self.loss(dict(zip(self.ini_est.keys(), z_curr))) <= self.loss(dict(zip(self.ini_est.keys(), v_curr))):
+                if self.loss(dict(zip(self.ini_est.keys(), z_curr))) <= self.loss(
+                        dict(zip(self.ini_est.keys(), v_curr))):
                     x_soft = z_curr
                 else:
                     x_soft = v_curr
