@@ -288,7 +288,6 @@ class AdaBridge(SdeLearner):
             i_nz = np.abs(par) > 1.5 * np.power(penalty * w, 2 / 3)
             out[i_nz] = 2 / 3 * par[i_nz] * \
                         (1 + np.cos(2 / 3 * np.arccos(-penalty * w[i_nz] / 4 * np.power(np.abs(par[i_nz]) / 3, -1.5))))
-            out[padding == 0] = 0
             return out
         else:
             # placeholder for future updates to general q-thresholding
@@ -394,8 +393,7 @@ class AdaBridge(SdeLearner):
         # x_curr = np.where(padding == 1, x_soft, x_prev)
         jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
         x_curr = np.copy(x_prev)
-        x_curr[padding == 1] = self.hard_threshold(par=x_prev[padding == 1] - s * jac_y, penalty=penalty * s,
-                                                   padding=padding)
+        x_curr[padding == 1] = self.hard_threshold(par=x_prev[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
         while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
 
