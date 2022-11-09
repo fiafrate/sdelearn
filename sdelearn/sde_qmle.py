@@ -225,10 +225,14 @@ class Qmle(SdeLearner):
             X_res = np.array(self.X[1:] - self.X[:(self.X.shape[0] - 1)] - b_n * self.sde.sampling.delta).reshape(
                 self.X.shape[0] - 1, self.sde.model.n_var, 1)
             X_res_t = X_res.reshape(self.X.shape[0] - 1, 1, self.sde.model.n_var)
-            out = 0.5 * np.sum(
-                np.matmul(X_res_t, np.matmul(np.linalg.inv(S_n), X_res)) * 1 / self.sde.sampling.delta +
-                np.linalg.slogdet(S_n)[
-                    1])
+            log_dets = np.linalg.slogdet(S_n)
+            if np.all(log_dets[0] > 0):
+                out = 0.5 * np.sum(
+                    np.matmul(X_res_t, np.matmul(np.linalg.inv(S_n), X_res)) * 1 / self.sde.sampling.delta +
+                    log_dets[1])
+            else:
+                out = 1e100
+
 
         if self.sde.model.mode == 'sym':
             try:
@@ -237,12 +241,15 @@ class Qmle(SdeLearner):
                 return (np.random.rand() + 1) * self.X.shape[0] ** 2
 
             log_dets = np.linalg.slogdet(self.Ss)
-            log_det = np.where(log_dets[0] != 0, log_dets[1], np.zeros_like(log_dets[1]))
-            out = 0.5 * np.sum(
-                np.matmul(self.DXS_inv,
-                          (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2,
-                                                                                                 1)).squeeze() * 1 / self.sde.sampling.delta
-                + log_det) * 1 / len(self.batch_id)
+            # log_det = np.where(log_dets[0] != 0, log_dets[1], np.zeros_like(log_dets[1]))
+            if np.all(log_dets[0] > 0):
+                out = 0.5 * np.sum(
+                    np.matmul(self.DXS_inv,
+                              (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2, 1)).squeeze()
+                    * 1/self.sde.sampling.delta
+                    + log_dets[1]) * 1 / len(self.batch_id)
+            else:
+                out = 1e100
 
         return out
 
@@ -264,10 +271,14 @@ class Qmle(SdeLearner):
             log_dets = np.linalg.slogdet(self.Ss)
             log_det = np.where(log_dets[0] != 0, log_dets[1], np.zeros_like(log_dets[1]))
 
-            out = 0.5 * np.sum(
-                np.matmul(np.matmul(self.DX[self.batch_id], self.Ss_inv),
-                          (self.DX[self.batch_id]).transpose(0, 2, 1)).squeeze() * 1 / self.sde.sampling.delta
-                + log_det) * 1 / len(self.batch_id)
+
+            if np.all(log_dets[0] > 0):
+                out = 0.5 * np.sum(
+                    np.matmul(np.matmul(self.DX[self.batch_id], self.Ss_inv),
+                              (self.DX[self.batch_id]).transpose(0, 2, 1)).squeeze() * 1 / self.sde.sampling.delta
+                    + log_dets[1]) * 1 / len(self.batch_id)
+            else:
+                out = 1e100
 
         return out
 

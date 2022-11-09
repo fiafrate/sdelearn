@@ -54,9 +54,10 @@ class AdaBridge(SdeLearner):
         # fix hessian matrix if not symmetric positive definite
         self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
         v, a = np.linalg.eigh(self.ini_hess0)
-        # set to zero negative eigs + some small noise
-        # v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
-        v[v < 0] = np.abs(v[v < 0])
+        # set to zero negative eigs + some small noise (closest SPD approx)
+        v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+        # replace neg eigvals  with positive vales
+        # v[v < 0] = np.abs(v[v < 0])
         # lipschitz constant of quadratic part
         self.lip = np.max(v)
         self.ini_hess = a @ np.diag(v) @ a.transpose()
@@ -88,19 +89,21 @@ class AdaBridge(SdeLearner):
         self.lambda_min = None
 
         if penalty is None:
+            self.n_pen = n_pen
             self.penalty = np.zeros(n_pen)
             self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max), num=n_pen - 1))
             self.penalty[n_pen - 1] = self.lambda_max
         else:
-            n_pen = len(penalty)
+            self.n_pen = len(penalty)
             self.penalty = np.sort(penalty)
 
         # initialize solution path
         self.est_path = np.empty((len(self.penalty), len(self.ini_est)))
         self.est_path[0] = np.array(list(self.ini_est.values()))
-
+        # last value set as zero -- try to estimate backwards
+        self.est_path[self.n_pen-1] = np.zeros(len(self.ini_est.values()))
         # details on optim_info results
-        self.path_info = []
+        self.path_info = [None]*(self.n_pen-2)
 
         # info on CV
         self.val_loss = None
@@ -138,22 +141,22 @@ class AdaBridge(SdeLearner):
         :return: self
         """
         self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, **kwargs}
-        self.path_info = []
+        #self.path_info = []
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
 
         if cv is None:
-            for i in range(len(self.est_path) - 1):
+            for i in range(len(self.est_path) - 2):
                 # fix epsilon:
                 # eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
                 # kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
                 # compute est
-                cur_est = self.proximal_gradient(self.est_path[i], self.penalty[i + 1], **kwargs)
+                cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
                 # restore epsilon for next iteration
                 # kwargs.update(epsilon=eps_ini)
                 # store results
-                self.path_info.append(cur_est)
-                self.est_path[i + 1] = cur_est['x']
+                self.path_info[self.n_pen - 3 - i] = cur_est
+                self.est_path[self.n_pen - 2 - i] = cur_est['x']
         elif 0 < cv < 1:
             n = self.sde.data.n_obs
             n_val = int(cv * n)
