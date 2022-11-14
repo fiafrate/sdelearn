@@ -80,8 +80,12 @@ class AdaBridge(SdeLearner):
         self.w_ada = np.array(list(self.weights.values())) / \
                      np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
 
-        self.lambda_max = np.max(
-            np.power(np.abs(2 / 3 * self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)
+        c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
+        grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
+        self.lambda_max = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (q - 2) / self.w_ada) * self.lip ** (q - 1)
+
+        # self.lambda_max = np.max(
+        #     np.power(np.abs(2 / 3 * self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)
 
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
@@ -274,6 +278,7 @@ class AdaBridge(SdeLearner):
     def hard_threshold(self, par, penalty, q=0.5, padding=None):
         """
         bridge hard-thresholding operator
+        :param q: order of thresholding
         :param par: evaluation point
         :param penalty: penalty parameter multiplying adaptive weights in Sde.AdaLasso object
         :param padding: optionally compute soft thresh on a subvector indexed by padding == 1
@@ -319,7 +324,7 @@ class AdaBridge(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-02, max_it=1e4, bounds=None,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None,
                           opt_alg="mAPG",
                           backtracking=False,
                           **kwargs):

@@ -144,6 +144,8 @@ do not have names, so they are assumed to have the same order as `start`.
 The ordered list of parameters can be
 accessed by `Sde.model.param`.
 
+* In Qmle.fit if `hess_exact` is set to `False` choose an optimization method which supports Hessian computation (either exact
+or  approximate, see [scipy documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html)). 
 ## Examples
 
 Fit a multivariate SDE model from simulated data (script [sdelearn-test.py](tests/sdelearn-test.py)).

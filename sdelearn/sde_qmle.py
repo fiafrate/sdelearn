@@ -51,7 +51,7 @@ class Qmle(SdeLearner):
         :return: self, after updating self.optim_info, self.est, self.vcov
         """
         # catch args
-        self.optim_info['args'] = {'method': method, 'two_step': two_step, **kwargs}
+        self.optim_info['args'] = {'method': method, 'two_step': two_step, 'hess_exact': hess_exact, **kwargs}
         # fix bounds and start order - bounds are assumed to have same order as start!
         if kwargs.get('bounds') is not None:
             bounds = kwargs.get('bounds')

@@ -302,7 +302,7 @@ class AdaLasso(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-02, max_it=1e4, bounds=None,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e3, bounds=None,
                           opt_alg="fista",
                           backtracking=False,
                           **kwargs):
