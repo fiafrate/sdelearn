@@ -82,7 +82,7 @@ class AdaBridge(SdeLearner):
 
         c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
         grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
-        self.lambda_max = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (q - 2) / self.w_ada) * self.lip ** (q - 1)
+        self.lambda_max = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / self.w_ada) * self.lip ** (q - 1)
 
         # self.lambda_max = np.max(
         #     np.power(np.abs(2 / 3 * self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)

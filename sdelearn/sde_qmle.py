@@ -41,9 +41,9 @@ class Qmle(SdeLearner):
         """
 
         :param start: optimization starting point
-        :param method: optimization method to use: wither AGD for accelerated gradient descent (experimental)
+        :param method: optimization method to use: either AGD for accelerated gradient descent (experimental)
             or any method supported by scipy.optimize
-        :param two_step: boolean, whether to perform two step optimization (diffusion first, then drift) as in
+        :param two_step: boolean, whether to perform two-step optimization (diffusion first, then drift) as in
         Yoshida, Nakahiro. "Quasi-likelihood analysis and its applications." Statistical Inference for Stochastic Processes 25.1 (2022): 43-60.
         :param hess_exact: use exact computation of the hessian (only in symbolic mode) or use approximation returned by
         scipy.optimize
