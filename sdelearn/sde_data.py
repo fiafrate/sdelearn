@@ -11,6 +11,7 @@ class SdeData:
     def format_data(self, time_index=None, col_names=None):
         """
         add timestamps and colnames to data
+
         :param time_index: vector of time indices of obs (this should match Sde.Sampling.grid
         :param col_names: vector of variables names (this should match Sde.Model.state_var
         :return:

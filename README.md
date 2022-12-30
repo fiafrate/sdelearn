@@ -105,6 +105,13 @@ The loss function is the negative log-quasi-likelihood.
 If the Sde object was specified in `symbolic` mode, 
 symbolic derivatives of the loss functions are computed.
 
+The `fit` method allows for minimization of the "full" loss
+function or "two-step", estimating diffusion parameters first and then 
+drift. The `hess_exact` option controls how the Hessian matrix (used to build the Fisher information)
+is computed. It allows to choose 
+whether to use the exact symbolic computation of the Hessian matrix 
+or a (faster, less accurate) approximation deriving from the optimization algorithm, 
+if available (e.g. with `BFGS` and `L-BFGS-B`) otherwise it is ignored.
 
 
 ### AdaLasso

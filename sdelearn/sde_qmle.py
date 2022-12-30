@@ -138,7 +138,7 @@ class Qmle(SdeLearner):
                         warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
 
                     # compute and save hessian and vcov, either exact or approx
-                    if hess_exact:
+                    if hess_exact or not hasattr(res_alpha, 'hess_inv'):
                         self.optim_info["hess"] = self.hessian(self.est)
                         self.vcov = np.linalg.inv(self.optim_info["hess"])
                     else:
@@ -232,7 +232,6 @@ class Qmle(SdeLearner):
                     log_dets[1])
             else:
                 out = 1e100
-
 
         if self.sde.model.mode == 'sym':
             try:

@@ -80,9 +80,17 @@ class AdaBridge(SdeLearner):
         self.w_ada = np.array(list(self.weights.values())) / \
                      np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
 
+        # maximal lambda value (starting point for backward algorithms: self.proximal_gradient(0, lambda_max) = 0
         c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
         grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
-        self.lambda_max = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / self.w_ada) * self.lip ** (q - 1)
+        self.lambda_maxBW = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / self.w_ada) * self.lip ** (q - 1)
+
+        # forward lambda_max: kills last coef standing.
+        a_ql = (q * self.w_ada) ** (1 / (2 - q)) * (
+                    np.diag(self.ini_hess) ** ((1 - q) / (2 - q)) * (1 - q) ** (1 / (2 - q)) + (
+                        (1 - q) / np.diag(self.ini_hess)) ** ((q - 1) / (2 - q)))
+
+        self.lambda_maxFW = np.max(np.abs(self.ini_hess @ np.array(list(self.ini_est.values())) / a_ql)) ** (2 - q)
 
         # self.lambda_max = np.max(
         #     np.power(np.abs(2 / 3 * self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)
@@ -91,23 +99,31 @@ class AdaBridge(SdeLearner):
         self.lambda_opt = None
         # lambda corresponding to min cv score ("lambda.min")
         self.lambda_min = None
-
         if penalty is None:
             self.n_pen = n_pen
-            self.penalty = np.zeros(n_pen)
-            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max), num=n_pen - 1))
-            self.penalty[n_pen - 1] = self.lambda_max
+
+            self.penaltyBW = np.zeros(n_pen)
+            self.penaltyBW[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_maxBW), num=n_pen - 1))
+            self.penaltyBW[n_pen - 1] = self.lambda_maxBW
+
+            self.penaltyFW = np.zeros(n_pen)
+            self.penaltyFW[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_maxFW), num=n_pen - 1))
+            self.penaltyFW[n_pen - 1] = self.lambda_maxFW
+
+            self.penalty = None
         else:
             self.n_pen = len(penalty)
             self.penalty = np.sort(penalty)
+            self.penaltyBW = self.penalty
+            self.penaltyFW = self.penalty
 
         # initialize solution path
-        self.est_path = np.empty((len(self.penalty), len(self.ini_est)))
+        self.est_path = np.empty((self.n_pen, len(self.ini_est)))
         self.est_path[0] = np.array(list(self.ini_est.values()))
         # last value set as zero -- try to estimate backwards
         self.est_path[self.n_pen-1] = np.zeros(len(self.ini_est.values()))
         # details on optim_info results
-        self.path_info = [None]*(self.n_pen-2)
+        self.path_info = [None]*(self.n_pen-1)
 
         # info on CV
         self.val_loss = None
@@ -128,8 +144,10 @@ class AdaBridge(SdeLearner):
 
         return out
 
-    def fit(self, cv=None, nfolds=5, cv_metric="loss", **kwargs):
+    def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
         """
+        :param backwards: compute solution path either backwards (starting from the zero solution at lambda_max) or
+            forwards (starting from initial estimate for lambda=0)
         :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
             - None no validation takes place.
             - cv in (0,1): proportion of obs to be used as validation. E.g. if cv = 0.1 the last 10% of
@@ -144,23 +162,35 @@ class AdaBridge(SdeLearner):
         :param kwargs: additional arguments for controlling optimization. See description of `proximal_gradient`
         :return: self
         """
-        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, **kwargs}
-        #self.path_info = []
+
+        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, 'backwards': backwards, **kwargs}
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
 
+        # fix penalty: if not supplied choose either forward or backward
+        if backwards:
+            self.penalty = self.penaltyBW
+        else:
+            self.penalty = self.penaltyFW
+
         if cv is None:
-            for i in range(len(self.est_path) - 2):
-                # fix epsilon:
-                # eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
-                # kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
-                # compute est
-                cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
-                # restore epsilon for next iteration
-                # kwargs.update(epsilon=eps_ini)
-                # store results
-                self.path_info[self.n_pen - 3 - i] = cur_est
-                self.est_path[self.n_pen - 2 - i] = cur_est['x']
+            if backwards:
+                # last value set as zero -- try to estimate backwards
+                self.est_path[self.n_pen - 1] = np.zeros(len(self.ini_est.values()))
+                for i in range(len(self.est_path) - 2):
+                    # compute est
+                    cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
+                    # store results
+                    self.path_info[self.n_pen - 4 - i] = cur_est
+                    self.est_path[self.n_pen - 2 - i] = cur_est['x']
+            else:
+                for i in range(len(self.est_path) - 1):
+                    # fix epsilon:
+                    # compute est
+                    cur_est = self.proximal_gradient(self.est_path[i], self.penalty[i + 1], **kwargs)
+                    # store results
+                    self.path_info[i] = cur_est
+                    self.est_path[i + 1] = cur_est['x']
         elif 0 < cv < 1:
             n = self.sde.data.n_obs
             n_val = int(cv * n)
@@ -221,7 +251,7 @@ class AdaBridge(SdeLearner):
             sde_tr = copy.deepcopy(self.sde)
             sde_val = copy.deepcopy(self.sde)
             # array to store loss values
-            val_loss = np.full((len(self.penalty) - 1, nfolds), np.nan)
+            val_loss = np.full((self.n_pen - 1, nfolds), np.nan)
             for k in range(nfolds):
                 # create auxiliary sde objects
                 sde_tr.sampling = self.sde.sampling.sub_sampling(from_range=[0, ntr0 + k * nkth])
@@ -324,7 +354,7 @@ class AdaBridge(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e4, bounds=None,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
                           opt_alg="mAPG",
                           backtracking=False,
                           **kwargs):
@@ -371,18 +401,18 @@ class AdaBridge(SdeLearner):
 
         if opt_alg == 'mAPG':
             t_prev = 1
-            s_lip = 1 / self.lip
+            s_lip = 0.9 / self.lip
         elif opt_alg == "cyclic":
             padding = np.zeros_like(x_prev)
             jac_y = self.ini_hess @ (x_prev - par_ini)
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
-            s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+            s_lip = 0.9 / np.diag(self.ini_hess)[padding == 1]
             block_end = False
         elif opt_alg == "block_wise":
             padding = np.zeros_like(x_prev, dtype=int)
             padding[self.group_idx[self.group_names[(it_count - 1) % len(self.group_names)]]] = 1
-            s_lip = 1 / self.block_lip[(it_count - 1) % len(self.group_names)]
+            s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
             block_end = False
 
         # stepsize choice
@@ -422,11 +452,11 @@ class AdaBridge(SdeLearner):
                 x_prev = np.copy(x_curr)
                 if self.loss(dict(zip(self.ini_est.keys(), z_curr))) <= self.loss(
                         dict(zip(self.ini_est.keys(), v_curr))):
-                    x_soft = z_curr
+                    x_curr = z_curr
                 else:
-                    x_soft = v_curr
+                    x_curr = v_curr
 
-                x_curr = np.where(padding == 1, x_soft, x_prev)
+                # x_curr = np.where(padding == 1, x_soft, x_prev)
                 if bounds is not None:
                     x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
                     x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
@@ -453,7 +483,7 @@ class AdaBridge(SdeLearner):
                     # at the end of current cycle
                     block_end = True
 
-                s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+                s_lip = 0.9 / np.diag(self.ini_hess)[padding == 1]
                 if backtracking:
                     s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
                     s = max(s, s_lip)
@@ -478,7 +508,7 @@ class AdaBridge(SdeLearner):
                     # at beginning of new cycle store prev values
                     x_prev = np.copy(x_curr)
                 #
-                s_lip = 1 / self.block_lip[(it_count - 1) % len(self.group_names)]
+                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 if backtracking:
                     s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
                     s = max(s, s_lip)
@@ -498,7 +528,7 @@ class AdaBridge(SdeLearner):
             message = 'Maximum number of iterations reached'
             status = 1
         else:
-            message = 'Success: gradient norm less than epsilon'
+            message = 'Success: increment norm smaller than threshold'
             status = 0
 
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
