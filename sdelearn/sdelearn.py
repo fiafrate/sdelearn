@@ -45,7 +45,8 @@ class Sde:
         # should check that model and sampling is not None
 
         # assign parameter names if missing
-        self.model.param = list(truep.keys())
+        if self.model.param is None:
+            self.model.param = list(truep.keys())
 
         sim = np.empty([self.sampling.n, self.model.n_var])
         if self.sampling.x0 is None:

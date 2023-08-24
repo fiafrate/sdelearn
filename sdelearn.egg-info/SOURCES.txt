@@ -3,8 +3,10 @@ README.md
 pyproject.toml
 setup.py
 sdelearn/__init__.py
+sdelearn/sde_bridge-bkp.py
 sdelearn/sde_bridge.py
 sdelearn/sde_data.py
+sdelearn/sde_lasso-bkp.py
 sdelearn/sde_lasso.py
 sdelearn/sde_learner.py
 sdelearn/sde_model.py
