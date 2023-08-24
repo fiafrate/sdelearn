@@ -167,7 +167,7 @@ class AdaBridge(SdeLearner):
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
 
-        # fix penalty: if not supplied choose either forward or backward
+        # fix penalty: if not supplied choose either forward or backward (has no effect if penalty is supplied)
         if backwards:
             self.penalty = self.penaltyBW
         else:
