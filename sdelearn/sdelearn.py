@@ -6,6 +6,18 @@ from .sde_data import SdeData as Data
 
 
 class Sde:
+    """
+    Central class that integrates the components of SDEs: sampling, model, and data.
+    Enables operations like setting sampling parameters, defining the model, and simulating data based on the model.
+    Built-in checks ensure consistency and compatibility across components.
+
+    Attributes
+
+    - `model`: An instance of the SdeModel class representing the SDE model.
+    - `sampling`: An instance of the SdeSampling class representing the sampling scheme.
+    - `data`: An optional instance of the SdeData class representing the observed time series.
+
+    """
     def __init__(self, sampling, model, data=None):
         # this assumes inputs are of suitable classes, or None for data
         self.model = model

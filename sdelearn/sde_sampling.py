@@ -3,8 +3,33 @@ import copy
 
 
 class SdeSampling:
+    """
+    A class to handle sampling for stochastic differential equations (SDEs).
+    Can create a grid of times between an initial and terminal point.
+    Offers sub-sampling functionality.
+
+    - `initial`: The initial time.
+    - `terminal`: The terminal time.
+    - `n`: Number of points in the grid.
+    - `delta`: The difference between consecutive points in the grid.
+    - `grid`: An array representing the grid of times.
+    - `x0`: Initial value for a potential SDE, defaulted to `None`.
+
+    """
     def __init__(self, initial, terminal, n=None, delta=None):
+        """
+        Construct a sampling object.
+        :param initial: initial sampling time
+        :param terminal: final sampling time
+        :param n: number of points in the grid
+        :param delta: The difference between consecutive points in the grid.
+
+        `initial` and `terminal` parameters are required as well as only one between
+        `n` and `delta`.
+        """
         self.initial = initial
+
+        assert n is not None or delta is not None, "n or delta parameter missing"
 
         if n is not None:
             self.grid, self.delta = np.linspace(initial, terminal, n, retstep=True)

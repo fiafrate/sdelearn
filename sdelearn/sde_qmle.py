@@ -50,6 +50,12 @@ class Qmle(SdeLearner):
         :param kwargs: additional parameters passed over to optimizers
         :return: self, after updating self.optim_info, self.est, self.vcov
         """
+
+
+        # if one of the parameter groups is missing necessarily use two step
+        if len(self.sde.model.drift_par) == 0 or len(self.sde.model.diff_par) == 0:
+            two_step = True
+
         # catch args
         self.optim_info['args'] = {'method': method, 'two_step': two_step, 'hess_exact': hess_exact, **kwargs}
         # fix bounds and start order - bounds are assumed to have same order as start!
@@ -95,42 +101,58 @@ class Qmle(SdeLearner):
             if method != 'AGD':
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
                 if two_step:
-                    # optimize wrt beta -----------------------------------------------
-                    # fix bounds
-                    kwargs2 = kwargs.copy()
-                    if kwargs2.get("bounds") is not None:
-                        bounds_id = [list(start.keys()).index(p) for p in self.sde.model.diff_par]
-                        kwargs2["bounds"] = [kwargs2.get("bounds")[i] for i in bounds_id]
+                    # begin two step estimation -------
+                    # we are here either because the user chose two_step=True or because
+                    # some a parameter group is missing: check whether par group is present
+                    # before perfoming partial estimation.
 
-                    x_start = np.array([start.get(k) for k in self.sde.model.diff_par])
-                    group_ini = np.array([start.get(k) for k in self.sde.model.drift_par])
-                    res_beta = \
-                        optimize.minimize(fun=self.loss_wrap2,
-                                          x0=x_start,
-                                          args=(self, "beta", group_ini),
-                                          method=method,
-                                          jac=Qmle.grad_wrap2,
-                                          **kwargs2)
+                    # initialize empty result array
+                    res_beta = type('res', (), {'x' : np.array([])})
+                    if len(self.sde.model.diff_par) > 0:
+                        # optimize wrt beta (diffusion) -----------------------------------------------
+                        # fix bounds
+                        kwargs2 = kwargs.copy()
+                        if kwargs2.get("bounds") is not None:
+                            bounds_id = [list(start.keys()).index(p) for p in self.sde.model.diff_par]
+                            kwargs2["bounds"] = [kwargs2.get("bounds")[i] for i in bounds_id]
 
-                    # optimize wrt alpha --------------------------------------------------------
-                    # fix bounds
-                    self.aux_par = None
-                    kwargs2 = kwargs.copy()
-                    if kwargs2.get("bounds") is not None:
-                        bounds_id = [list(start.keys()).index(p) for p in self.sde.model.drift_par]
-                        kwargs2["bounds"] = [kwargs2.get("bounds")[i] for i in bounds_id]
+                        x_start = np.array([start.get(k) for k in self.sde.model.diff_par])
+                        group_ini = np.array([start.get(k) for k in self.sde.model.drift_par])
+                        res_beta = \
+                            optimize.minimize(fun=self.loss_wrap2,
+                                              x0=x_start,
+                                              args=(self, "beta", group_ini),
+                                              method=method,
+                                              jac=Qmle.grad_wrap2,
+                                              **kwargs2)
 
-                    x_start = np.array([start.get(k) for k in self.sde.model.drift_par])
-                    group_ini = np.array(res_beta.x)
-                    res_alpha = \
-                        optimize.minimize(fun=self.loss_wrap2,
-                                          x0=x_start,
-                                          args=(self, "alpha", group_ini),
-                                          method=method,
-                                          jac=Qmle.grad_wrap2,
-                                          **kwargs2)
+                    # initialize empty result array
+                    res_alpha = type('res', (), {'x' : np.array([])})
+                    if len(self.sde.model.drift_par) > 0:
+                        # optimize wrt alpha (drift) --------------------------------------------------------
+                        # fix bounds
+                        self.aux_par = None
+                        kwargs2 = kwargs.copy()
+                        if kwargs2.get("bounds") is not None:
+                            bounds_id = [list(start.keys()).index(p) for p in self.sde.model.drift_par]
+                            kwargs2["bounds"] = [kwargs2.get("bounds")[i] for i in bounds_id]
+
+                        x_start = np.array([start.get(k) for k in self.sde.model.drift_par])
+                        group_ini = np.array(res_beta.x)
+                        res_alpha = \
+                            optimize.minimize(fun=self.loss_wrap2,
+                                              x0=x_start,
+                                              args=(self, "alpha", group_ini),
+                                              method=method,
+                                              jac=Qmle.grad_wrap2,
+                                              **kwargs2)
+
                     self.est = dict(zip(self.sde.model.param, np.concatenate((res_alpha.x, res_beta.x))))
-
+                    # final round of auxiliary quantities updates, in case drift group was missing
+                    if len(self.sde.model.drift_par) == 0:
+                        self.aux_par = None
+                        self.update_aux(self.est)
+                    # create result components
                     self.optim_info['res_alpha'] = res_alpha
                     self.optim_info['res_beta'] = res_beta
 
@@ -138,28 +160,51 @@ class Qmle(SdeLearner):
                         warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
 
                     # compute and save hessian and vcov, either exact or approx
-                    if hess_exact or not hasattr(res_alpha, 'hess_inv'):
+                    if hess_exact or not (hasattr(res_alpha, 'hess_inv') or hasattr(res_beta, 'hess_inv')):
+                        self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
                         self.vcov = np.linalg.inv(self.optim_info["hess"])
                     else:
-                        if isinstance(res_alpha.hess_inv, np.ndarray):
-                            self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                                  [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]])
-                        else:
-                            self.vcov = self.vcov = np.block(
-                                [[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                 [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]])
+                        #extract block cov matrix from bfgs or similar if both par blocks are available
+                        if len(self.sde.model.drift_par) * len(self.sde.model.diff_par) > 0:
+                            if isinstance(res_alpha.hess_inv, np.ndarray):
+                                self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                                                      [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]])
+                            else:
+                                self.vcov = np.block(
+                                    [[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                                     [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]])
 
-                        self.optim_info['hess'] = np.linalg.inv(self.vcov)
+                            self.optim_info['hess'] = np.linalg.inv(self.vcov)
 
+                        # extract cov matrix if one param block is missing:
+                        elif len(self.sde.model.drift_par) > 0:
+                            if isinstance(res_alpha.hess_inv, np.ndarray):
+                                self.vcov = res_alpha.hess_inv
+                            else:
+                                self.vcov = res_alpha.hess_inv.todense()
+
+                        elif len(self.sde.model.diff_par) > 0:
+                            if isinstance(res_beta.hess_inv, np.ndarray):
+                                self.vcov = res_beta.hess_inv
+                            else:
+                                self.vcov = res_beta.hess_inv.todense()
+
+                            self.optim_info['hess'] = np.linalg.inv(self.vcov)
+
+
+
+                        #end two step estimation
 
                 else:
+                    # begin simultaneous estimation
                     res = optimize.minimize(fun=self.loss_wrap, x0=np.array(list(start.values())), args=(self),
                                             method=method,
                                             jac=Qmle.grad_wrap, hess=Qmle.hess_wrap, **kwargs)
                     self.est = dict(zip(self.sde.model.param, res.x))
 
-                    if hess_exact:
+                    if hess_exact or not hasattr(res, 'hess_inv'):
+                        self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
                         self.vcov = np.linalg.inv(self.optim_info["hess"])
                     else:
@@ -173,8 +218,10 @@ class Qmle(SdeLearner):
                     if self.faulty_par:
                         warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
 
+                    # end simultaneous estimation
 
                 return self
+
 
     # @staticmethod
     # def qmle(sde, start, upper=None, lower=None):
@@ -258,13 +305,13 @@ class Qmle(SdeLearner):
         try:
             self.update_aux2(param, group, batch_id)
         except np.linalg.LinAlgError:
-            return (np.random.rand() + 1) * self.X.shape[0] **2
+            return (np.random.rand() + 1) * self.X.shape[0] ** 2
 
         if group == "alpha":
             out = 0.5 * np.sum(
-                np.matmul(self.DXS_inv, (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2,
-                                                                                                               1)).squeeze() * 1 / self.sde.sampling.delta) * 1 / len(
-                self.batch_id)
+                np.matmul(self.DXS_inv,
+                          (self.DX[self.batch_id] - self.sde.sampling.delta * self.bs).transpose(0, 2, 1)).squeeze()
+                * 1 / self.sde.sampling.delta) * 1 / len(self.batch_id)
 
         if group == "beta":
             log_dets = np.linalg.slogdet(self.Ss)
@@ -443,29 +490,41 @@ class Qmle(SdeLearner):
         # DSs = np.array([self.model.der_foo["DS"](*x, **param) for x in self.X[:-1]])
         HSs = np.moveaxis(self.sde.model.der_foo["HS"](*self.X[self.batch_id].transpose(), **param), -1, 0)
 
-        HESSA1 = np.einsum('nd, ndpq -> npq', self.DXS_inv[:, 0, :], Hbs)
-        HESSA2 = np.einsum('npd, ndq -> npq', Jbs.transpose((0, 2, 1)), np.einsum('nde, nep -> ndp', self.Ss_inv, Jbs))
-        hess_alpha = np.sum(-2 * HESSA1 + 2 * HESSA2, axis=0)
+        if len(self.sde.model.drift_par) > 0:
+            HESSA1 = np.einsum('nd, ndpq -> npq', self.DXS_inv[:, 0, :], Hbs)
+            HESSA2 = np.einsum('npd, ndq -> npq', Jbs.transpose((0, 2, 1)), np.einsum('nde, nep -> ndp', self.Ss_inv, Jbs))
+            hess_alpha = np.sum(-2 * HESSA1 + 2 * HESSA2, axis=0)
 
-        GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
-        GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
 
-        HESSB1 = np.trace(np.einsum('npde, nqef -> npqdf', GB1, GB1), axis1=3, axis2=4)
-        HESSB2 = np.trace(np.einsum('nde, npqef -> npqdf', self.Ss_inv, HSs), axis1=3, axis2=4)
+        if len(self.sde.model.diff_par) > 0:
+            GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
+            GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
 
-        HESSB3a = np.einsum('npde, nef, nqfg -> npqdg', DSs, self.Ss_inv, DSs)
-        HESSB3b = np.einsum('nde, npqef, nfg -> npqdg', self.Ss_inv, HSs, self.Ss_inv)
-        HESSB3c = HESSB3a - HESSB3b + HESSB3a.transpose((0, 2, 1, 3, 4))
+            HESSB1 = np.trace(np.einsum('npde, nqef -> npqdf', GB1, GB1), axis1=3, axis2=4)
+            HESSB2 = np.trace(np.einsum('nde, npqef -> npqdf', self.Ss_inv, HSs), axis1=3, axis2=4)
 
-        HESSB3 = np.einsum('nd, npqde, ne -> npq', self.DXS_inv[:, 0, :], HESSB3c, self.DXS_inv[:, 0, :])
+            HESSB3a = np.einsum('npde, nef, nqfg -> npqdg', DSs, self.Ss_inv, DSs)
+            #HESSB3b = np.einsum('nde, npqef, nfg -> npqdg', self.Ss_inv, HSs, self.Ss_inv)
+            HESSB3c = np.einsum('nde, npqef, nfg -> npqdg', self.Ss_inv, HESSB3a - HSs + HESSB3a.transpose((0, 2, 1, 3, 4)), self.Ss_inv)
+            HESSB3 = np.einsum('nd, npqde, ne -> npq', self.DXS_inv[:, 0, :], HESSB3c, self.DXS_inv[:, 0, :])
 
-        hess_beta = - HESSB1 + HESSB2 + 1 / dn * HESSB3
-        # make sure result is symmetric
-        hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
-        hess_ab = -2 * np.sum(
-            np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)
+            hess_beta = - HESSB1 + HESSB2 + 1 / dn * HESSB3
+            # make sure result is symmetric
+            #hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
+            hess_beta = np.sum(hess_beta , axis=0)
 
-        hess = 0.5 * np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
+        if len(self.sde.model.diff_par) * len(self.sde.model.drift_par)> 0:
+            hess_ab = -2 * np.sum(
+                np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)
+
+        if len(self.sde.model.diff_par) * len(self.sde.model.drift_par)> 0:
+           hess = 0.5 * np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
+
+        if len(self.sde.model.diff_par) == 0:
+            hess = hess_alpha
+        if len(self.sde.model.drift_par) == 0:
+            hess = hess_beta
+
         return hess
 
     @staticmethod

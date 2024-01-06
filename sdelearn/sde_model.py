@@ -3,6 +3,12 @@ import sympy as sym
 
 
 class SdeModel:
+    """
+    - Represents a model for stochastic differential equations (SDEs) with symbolic capabilities.
+    - Handles drift and diffusion components of the SDE.
+    - Supports both symbolic (default) and functional modes.
+
+    """
     def __init__(self, drift, diff, mod_shape=None, par_names=None, state_var=None, mode='sym'):
 
         '''
@@ -27,7 +33,7 @@ class SdeModel:
         # der_expr contains expressions, der_foo contains "lambdified" functions,
         # as a function of both x and param. These functions are NOT properly
         # vectorized as a result of https://github.com/sympy/sympy/issues/5642:
-        # if there are contants in the expression the result will be a single scalar,
+        # if there are constants in the expression the result will be a single scalar,
         # resulting in a ragged array. Operations on such arrays appear to be deprecated in numpy
         # TEMP SOLVED: ADDED INVISIBLE MULTIPLICATION BY ZERO SYMBOL TO CONSTANT EXPRESSIONS
         self.der_expr = None
@@ -104,21 +110,26 @@ class SdeModel:
         self.state_var = var_names
 
     def set_der(self):
-        Jb_expr = np.array(
-            [[expr.diff(param) + self.null_expr
-              for param in self.drift_par] for expr in self.b_expr])
-        Hb_expr = np.array(
-            [[[expr.diff(param1, param2) + self.null_expr
-               for param1 in self.drift_par] for param2 in self.drift_par] for expr in self.b_expr])
+        if len(self.drift_par) > 0:
+            Jb_expr = np.array(
+                [[expr.diff(param) + self.null_expr
+                  for param in self.drift_par] for expr in self.b_expr])
+            Hb_expr = np.array(
+                [[[expr.diff(param1, param2) + self.null_expr
+                   for param1 in self.drift_par] for param2 in self.drift_par] for expr in self.b_expr])
+        else:
+            Jb_expr = [[0]]
+            Hb_expr = [[[0]]]
 
-        DS_expr = np.array([[[expr.diff(param) + self.null_expr
-                              for expr in row] for row in self.S_expr] for param in self.diff_par])
-        HS_expr = np.array(
-            [[[[expr.diff(param1, param2) + self.null_expr
-                for expr in row] for row in self.S_expr] for param2 in self.diff_par] for param1 in self.diff_par])
-
-        # we are applying numpy operations to expressions! this seems to work...
-
+        if len(self.diff_par) > 0:
+            DS_expr = np.array([[[expr.diff(param) + self.null_expr
+                                  for expr in row] for row in self.S_expr] for param in self.diff_par])
+            HS_expr = np.array(
+                [[[[expr.diff(param1, param2) + self.null_expr
+                    for expr in row] for row in self.S_expr] for param2 in self.diff_par] for param1 in self.diff_par])
+        else:
+            DS_expr = [[[0]]]
+            HS_expr = [[[[0]]]]
         #
         # C_expr = np.matmul(DA_expr, self.A_expr.T)
         # DS_expr = C_expr + C_expr.transpose((0, 2, 1))
