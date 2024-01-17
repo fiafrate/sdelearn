@@ -72,10 +72,10 @@ class Qmle(SdeLearner):
             self.est = dict(zip(self.sde.model.param, res.x))
 
             if isinstance(res.hess_inv, np.ndarray):
-                self.vcov = res.hess_inv
+                self.vcov = res.hess_inv / (self.sde.data.n_obs - 1)
                 self.optim_info['hess'] = np.linalg.inv(res.hess_inv)
             else:
-                self.vcov = res.hess_inv.todense()
+                self.vcov = res.hess_inv.todense() / (self.sde.data.n_obs - 1)
                 self.optim_info['hess'] = np.linalg.inv(self.vcov)
 
             self.optim_info['res'] = res
@@ -94,7 +94,7 @@ class Qmle(SdeLearner):
                 self.optim_info['hess'] = self.hessian(self.est)
 
                 self.est = dict(zip(self.sde.model.param, res['x']))
-                self.vcov = np.linalg.inv(self.optim_info['hess'])
+                self.vcov = np.linalg.inv(self.optim_info['hess']) / (self.sde.data.n_obs - 1)
 
                 return self
 
@@ -163,34 +163,35 @@ class Qmle(SdeLearner):
                     if hess_exact or not (hasattr(res_alpha, 'hess_inv') or hasattr(res_beta, 'hess_inv')):
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
-                        self.vcov = np.linalg.inv(self.optim_info["hess"])
+                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
                     else:
                         #extract block cov matrix from bfgs or similar if both par blocks are available
                         if len(self.sde.model.drift_par) * len(self.sde.model.diff_par) > 0:
                             if isinstance(res_alpha.hess_inv, np.ndarray):
                                 self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                                      [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]])
+                                                      [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]]) / (self.sde.data.n_obs - 1)
+
                             else:
                                 self.vcov = np.block(
                                     [[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                     [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]])
+                                     [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]]) / (self.sde.data.n_obs - 1)
 
-                            self.optim_info['hess'] = np.linalg.inv(self.vcov)
+                            self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
 
                         # extract cov matrix if one param block is missing:
                         elif len(self.sde.model.drift_par) > 0:
                             if isinstance(res_alpha.hess_inv, np.ndarray):
-                                self.vcov = res_alpha.hess_inv
+                                self.vcov = res_alpha.hess_inv / (self.sde.data.n_obs - 1)
                             else:
-                                self.vcov = res_alpha.hess_inv.todense()
+                                self.vcov = res_alpha.hess_inv.todense() / (self.sde.data.n_obs - 1)
 
                         elif len(self.sde.model.diff_par) > 0:
                             if isinstance(res_beta.hess_inv, np.ndarray):
-                                self.vcov = res_beta.hess_inv
+                                self.vcov = res_beta.hess_inv / (self.sde.data.n_obs - 1)
                             else:
-                                self.vcov = res_beta.hess_inv.todense()
+                                self.vcov = res_beta.hess_inv.todense() / (self.sde.data.n_obs - 1)
 
-                            self.optim_info['hess'] = np.linalg.inv(self.vcov)
+                            self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
 
 
 
@@ -206,13 +207,13 @@ class Qmle(SdeLearner):
                     if hess_exact or not hasattr(res, 'hess_inv'):
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
-                        self.vcov = np.linalg.inv(self.optim_info["hess"])
+                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
                     else:
                         if isinstance(res.hess_inv, np.ndarray):
-                            self.vcov = res.hess_inv
+                            self.vcov = res.hess_inv / (self.sde.data.n_obs - 1)
                         else:
-                            self.vcov = res.hess_inv.todense()
-                        self.optim_info['hess'] = np.linalg.inv(self.vcov)
+                            self.vcov = res.hess_inv.todense() / (self.sde.data.n_obs - 1)
+                        self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
 
                     self.optim_info['res'] = res
                     if self.faulty_par:
@@ -493,7 +494,7 @@ class Qmle(SdeLearner):
         if len(self.sde.model.drift_par) > 0:
             HESSA1 = np.einsum('nd, ndpq -> npq', self.DXS_inv[:, 0, :], Hbs)
             HESSA2 = np.einsum('npd, ndq -> npq', Jbs.transpose((0, 2, 1)), np.einsum('nde, nep -> ndp', self.Ss_inv, Jbs))
-            hess_alpha = np.sum(-2 * HESSA1 + 2 * HESSA2, axis=0)
+            hess_alpha = np.sum(-2 * HESSA1 + 2 * dn * HESSA2, axis=0)
 
 
         if len(self.sde.model.diff_par) > 0:
@@ -508,7 +509,7 @@ class Qmle(SdeLearner):
             HESSB3c = np.einsum('nde, npqef, nfg -> npqdg', self.Ss_inv, HESSB3a - HSs + HESSB3a.transpose((0, 2, 1, 3, 4)), self.Ss_inv)
             HESSB3 = np.einsum('nd, npqde, ne -> npq', self.DXS_inv[:, 0, :], HESSB3c, self.DXS_inv[:, 0, :])
 
-            hess_beta = - HESSB1 + HESSB2 + 1 / dn * HESSB3
+            hess_beta = - HESSB1 + HESSB2 + (1/dn) * HESSB3
             # make sure result is symmetric
             #hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
             hess_beta = np.sum(hess_beta , axis=0)
