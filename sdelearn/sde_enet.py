@@ -85,7 +85,7 @@ class AdaElasticNet(SdeLearner):
         #c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
         c_q = 1
         grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
-        self.lambda_maxBW = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / self.w_ada) * self.lip ** (q - 1)
+        self.lambda_maxBW = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / (self.alpha * self.w_ada)) * self.lip ** (q - 1)
 
         # forward lambda_max: kills last coef standing.
         # a_ql = (q * self.w_ada) ** (1 / (2 - q)) * (

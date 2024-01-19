@@ -40,7 +40,9 @@ class Sde:
     def set_data(self, data, format_data=True):
         """
         sets the data attribute of Sde to data. If format = True (the default) data is formatted to have timestamp
-        and names corresponding to sampling and model attributes. :param data: :return:
+        and names corresponding to sampling and model attributes.
+        :param data: array-like object containing data, supported by pandas for data frame creation
+        :return: self
         """
         self.data = Data(data)
         assert self.model.n_var == self.data.data.shape[1], 'Number of variables in model does not match the shape of data!'

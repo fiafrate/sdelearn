@@ -14,6 +14,7 @@ class SdeModel:
         '''
                 if mode is not "fun" (meaning mode="sym", the default expected behavior)
                  either parameter names or var names should be inferred from expressions
+        :param par_names: dictionary with keys 'drift' and 'diffusion' containing list of characters naming parameters
         '''
         self.mode = mode
         if mode == 'sym':
@@ -40,9 +41,7 @@ class SdeModel:
         self.der_foo = None
 
         if par_names is not None:
-            self.drift_par = par_names["drift"]
-            self.diff_par = par_names["diffusion"]
-            self.param = self.drift_par + self.diff_par
+            self.set_param(par_names)
 
         if state_var is None:
             self.state_var = ["x{0}".format(x) for x in range(self.n_var)]
@@ -58,17 +57,18 @@ class SdeModel:
             self.A_expr = np.array([[v + self.null_expr for v in row] for row in diff])
             self.S_expr = self.A_expr @ self.A_expr.transpose()
             self.S_expr = np.array([[v + self.null_expr for v in row] for row in self.S_expr])
+
             # infer parameter names
+            par_names = {}
+
             sym_dr_names = [s.name for expr in self.b_expr for s in expr.free_symbols]
-            # var_names = [s.name for s in state_var]
-            self.drift_par = list(set(sym_dr_names) - set(self.state_var))
-            self.drift_par.sort()
+            par_names['drift'] = list(set(sym_dr_names) - set(self.state_var))
 
             sym_di_names = [s.name for row in self.A_expr for expr in row for s in expr.free_symbols]
-            self.diff_par = list(set(sym_di_names) - set(self.state_var))
-            self.diff_par.sort()
+            par_names['diffusion'] = list(set(sym_di_names) - set(self.state_var))
 
-            self.param = self.drift_par + self.diff_par
+            self.set_param(par_names)
+
 
             # create auxiliary functions for evaluating drift and diff expressions
 
@@ -101,10 +101,33 @@ class SdeModel:
         self.par_groups = {'drift': self.drift_par, 'diff': self.diff_par}
 
     def set_param(self, par_names):
-        self.drift_par = par_names["drift"]
-        self.diff_par = par_names["diffusion"]
-        self.param = [self.drift_par, self.diff_par]
-        self.par_groups = {'drift': self.drift_par, 'diff': self.diff_par}
+        '''
+        setup parameter info: store list of params, groups and numbers. Instantiate corresponding fields
+        :param par_names: dictionary with keys 'drift' and 'diffusion' containing list of characters naming parameters
+        :return:
+        '''
+
+        self.par_groups = {}
+
+        if par_names.get('drift') is None or len(par_names.get('drift')) == 0:
+            self.drift_par = []
+        else:
+            self.drift_par = [v for v in par_names["drift"]]
+            self.drift_par.sort()
+            self.par_groups['drift'] = self.drift_par
+
+        if par_names.get('diffusion') is None or len(par_names.get('diffusion')) == 0:
+            self.drift_par = []
+        else:
+            self.drift_par = [v for v in par_names["diffusion"]]
+            self.drift_par.sort()
+            self.par_groups['diff'] = self.drift_par
+
+        self.param = self.drift_par + self.diff_par
+        self.npar_dr = len(self.drift_par)
+        self.npar_di = len(self.diff_par)
+
+
 
     def set_var_names(self, var_names):
         self.state_var = var_names
