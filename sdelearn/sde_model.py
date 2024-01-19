@@ -95,10 +95,6 @@ class SdeModel:
             self.drift = drift
             self.diff = diff
 
-        self.npar_dr = len(self.drift_par)
-        self.npar_di = len(self.diff_par)
-
-        self.par_groups = {'drift': self.drift_par, 'diff': self.diff_par}
 
     def set_param(self, par_names):
         '''
@@ -117,11 +113,11 @@ class SdeModel:
             self.par_groups['drift'] = self.drift_par
 
         if par_names.get('diffusion') is None or len(par_names.get('diffusion')) == 0:
-            self.drift_par = []
+            self.diff_par = []
         else:
-            self.drift_par = [v for v in par_names["diffusion"]]
-            self.drift_par.sort()
-            self.par_groups['diff'] = self.drift_par
+            self.diff_par = [v for v in par_names["diffusion"]]
+            self.diff_par.sort()
+            self.par_groups['diff'] = self.diff_par
 
         self.param = self.drift_par + self.diff_par
         self.npar_dr = len(self.drift_par)
