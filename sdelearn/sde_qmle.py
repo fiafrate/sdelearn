@@ -161,39 +161,42 @@ class Qmle(SdeLearner):
                         warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
 
                     # compute and save hessian and vcov, either exact or approx
-                    if hess_exact or not (hasattr(res_alpha, 'hess_inv') or hasattr(res_beta, 'hess_inv')):
+                    if hess_exact:
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
                         self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
+                    # elif (hasattr(res_alpha, 'hess_inv') or hasattr(res_beta, 'hess_inv')):
+                    #     #extract block cov matrix from bfgs or similar if both par blocks are available
+                    #     if len(self.sde.model.drift_par) * len(self.sde.model.diff_par) > 0:
+                    #         if isinstance(res_alpha.hess_inv, np.ndarray):
+                    #             self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                    #                                   [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]]) / (self.sde.data.n_obs - 1)
+                    #
+                    #         else:
+                    #             self.vcov = np.block(
+                    #                 [[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
+                    #                  [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]]) / (self.sde.data.n_obs - 1)
+                    #
+                    #         self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
+                    #
+                    #     # extract cov matrix if one param block is missing:
+                    #     elif len(self.sde.model.drift_par) > 0:
+                    #         if isinstance(res_alpha.hess_inv, np.ndarray):
+                    #             self.vcov = res_alpha.hess_inv / (self.sde.data.n_obs - 1)
+                    #         else:
+                    #             self.vcov = res_alpha.hess_inv.todense() / (self.sde.data.n_obs - 1)
+                    #
+                    #     elif len(self.sde.model.diff_par) > 0:
+                    #         if isinstance(res_beta.hess_inv, np.ndarray):
+                    #             self.vcov = res_beta.hess_inv / (self.sde.data.n_obs - 1)
+                    #         else:
+                    #             self.vcov = res_beta.hess_inv.todense() / (self.sde.data.n_obs - 1)
+                    #
+                    #         self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
                     else:
-                        #extract block cov matrix from bfgs or similar if both par blocks are available
-                        if len(self.sde.model.drift_par) * len(self.sde.model.diff_par) > 0:
-                            if isinstance(res_alpha.hess_inv, np.ndarray):
-                                self.vcov = np.block([[res_alpha.hess_inv, np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                                      [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv]]) / (self.sde.data.n_obs - 1)
-
-                            else:
-                                self.vcov = np.block(
-                                    [[res_alpha.hess_inv.todense(), np.zeros((len(res_alpha.x), len(res_beta.x)))],
-                                     [np.zeros((len(res_beta.x), len(res_alpha.x))), res_beta.hess_inv.todense()]]) / (self.sde.data.n_obs - 1)
-
-                            self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
-
-                        # extract cov matrix if one param block is missing:
-                        elif len(self.sde.model.drift_par) > 0:
-                            if isinstance(res_alpha.hess_inv, np.ndarray):
-                                self.vcov = res_alpha.hess_inv / (self.sde.data.n_obs - 1)
-                            else:
-                                self.vcov = res_alpha.hess_inv.todense() / (self.sde.data.n_obs - 1)
-
-                        elif len(self.sde.model.diff_par) > 0:
-                            if isinstance(res_beta.hess_inv, np.ndarray):
-                                self.vcov = res_beta.hess_inv / (self.sde.data.n_obs - 1)
-                            else:
-                                self.vcov = res_beta.hess_inv.todense() / (self.sde.data.n_obs - 1)
-
-                            self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
-
+                        gs = self.gradient(self.est, ret_sample=True)
+                        self.optim_info["hess"] = np.tensordot(gs, gs, (0,0)) * (self.sde.data.n_obs - 1)
+                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
 
 
                         #end two step estimation
@@ -205,16 +208,20 @@ class Qmle(SdeLearner):
                                             jac=Qmle.grad_wrap, hess=Qmle.hess_wrap, **kwargs)
                     self.est = dict(zip(self.sde.model.param, res.x))
 
-                    if hess_exact or not hasattr(res, 'hess_inv'):
+                    if hess_exact:
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
                         self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
+                    # else:
+                    #     if isinstance(res.hess_inv, np.ndarray):
+                    #         self.vcov = res.hess_inv / (self.sde.data.n_obs - 1)
+                    #     else:
+                    #         self.vcov = res.hess_inv.todense() / (self.sde.data.n_obs - 1)
+                    #     self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
                     else:
-                        if isinstance(res.hess_inv, np.ndarray):
-                            self.vcov = res.hess_inv / (self.sde.data.n_obs - 1)
-                        else:
-                            self.vcov = res.hess_inv.todense() / (self.sde.data.n_obs - 1)
-                        self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
+                        gs = self.gradient(self.est, ret_sample=True)
+                        self.optim_info["hess"] = np.tensordot(gs, gs, (0,0)) * (self.sde.data.n_obs - 1)
+                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
 
                     self.optim_info['res'] = res
                     if self.faulty_par:
@@ -404,8 +411,14 @@ class Qmle(SdeLearner):
 
     # compute the gradient of the quasi-lik at point par for a given sde object
 
-    def gradient(self, param, batch_id=None):
-
+    def gradient(self, param, batch_id=None, ret_sample=False):
+        '''
+        compute the gradient of the negative quasi-lik at point par for a given sde object
+        :param param: dict of parameter values at which evaluate the gradient
+        :param batch_id: indices of subset of observation to be used, if None, default, uses all
+        :param ret_sample: if True returns the vector of gradient evaluation at each data point, without summing. Defaults to False
+        :return: array of gradient with same size as param. If ret_vec, an array with shape (n_obs, n_param) is returned
+        '''
         assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
 
         dn = self.sde.sampling.delta
@@ -439,11 +452,20 @@ class Qmle(SdeLearner):
             grad_beta = grad_beta1 + grad_beta2
 
         if self.sde.model.npar_dr > 0 and  self.sde.model.npar_di > 0:
-            return 0.5 * np.concatenate([np.sum(grad_alpha, axis=0), np.sum(grad_beta, axis=0)]) * 1 / len(self.batch_id)
+            if ret_sample:
+                return 0.5 * np.concatenate([grad_alpha, grad_beta], axis=1) * 1 / len(self.batch_id)
+            else:
+                return 0.5 * np.concatenate([np.sum(grad_alpha, axis=0), np.sum(grad_beta, axis=0)]) * 1 / len(self.batch_id)
         elif self.sde.model.npar_dr > 0:
-            return 0.5 * np.sum(grad_alpha, axis=0) * 1 / len(self.batch_id)
+            if ret_sample:
+                return 0.5 * grad_alpha * 1 / len(self.batch_id)
+            else:
+                return 0.5 * np.sum(grad_alpha, axis=0) * 1 / len(self.batch_id)
         else:
-            return 0.5 * np.sum(grad_beta, axis=0) * 1 / len(self.batch_id)
+            if ret_sample:
+                return 0.5 * grad_beta * 1 / len(self.batch_id)
+            else:
+                return 0.5 * np.sum(grad_beta, axis=0) * 1 / len(self.batch_id)
 
     def gradient2(self, param, group, batch_id=None):
         """

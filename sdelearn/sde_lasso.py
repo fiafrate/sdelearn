@@ -17,6 +17,8 @@ class AdaLasso(SdeLearner):
 
         :param sde: a Sde object
         :param base_estimator: a base estimator of class SdeLearner or a string naming a subclass for constructing one (e.g. Qmle)
+        :param lsa: if True uses least square approximation to compute the lasso solution. Otherwise a penalty term is added to the loss
+            of base_est.
         :param weights: adaptive weights/penalties for each parameter, in the form of a dictionary `{param: value}`,
             defaults to None, in that case all weights are set to 1
         :param delta: adjusts adaptive penalties as w_i / est_i^delta, defaults to zero meaning the adaptive weights
