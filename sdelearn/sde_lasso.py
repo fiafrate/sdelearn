@@ -318,7 +318,7 @@ class AdaLasso(SdeLearner):
         w = self.w_ada[padding == 1]
         return np.sign(par) * np.maximum(np.abs(par) - penalty * w, 0)
 
-    def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1, **kwargs):
+    def prox_backtrack(self, y_curr, penalty, gamma=0.8, s_ini=1, **kwargs):
 
         w_a = self.w_ada
         s = s_ini
@@ -353,6 +353,7 @@ class AdaLasso(SdeLearner):
     def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e3, bounds=None,
                           opt_alg="fista",
                           backtracking=False,
+                          s_ini = 10,
                           **kwargs):
         '''
         compute proximal gradient algorithms for regularization path optimization.
@@ -364,6 +365,7 @@ class AdaLasso(SdeLearner):
         :param opt_alg: choose optimization algorithm: either "fista", "cyclic" (coordinate-wise with custom order) or "block_wise"
             if sde model has block paramters
         :param backtracking: boolean, if true use backtracking to determine stepsize, otherwise use relevant lip constant
+        :param s_ini: initial stepsize value
         :param kwargs
         :return: dict 'x': last x point reached, 'f': loss function at x, 'status': convergence status 0/1,
             'message': convergence message, 'niter': number of iterations,\
@@ -392,6 +394,7 @@ class AdaLasso(SdeLearner):
         padding = np.ones_like(par_ini)
 
         assert opt_alg in ["fista", "cyclic", "block_wise"], 'invalid opt_alg'
+        assert not (opt_alg == 'block_wise' and len(self.group_names)==1) , 'invalid opt_alg'
 
         block_end = True
 
@@ -416,7 +419,7 @@ class AdaLasso(SdeLearner):
 
         # stepsize choice
         if backtracking:
-            s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
+            s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s_ini)
             # s = max(s, s_lip)
         else:
             s = s_lip
@@ -433,14 +436,14 @@ class AdaLasso(SdeLearner):
         x_curr = np.copy(x_prev)
         x_curr[padding == 1] = self.soft_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
 
-        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
+        while (np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip or not block_end) and it_count < max_it :
 
             it_count += 1
 
             if opt_alg == 'fista':
 
                 if backtracking:
-                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
+                    s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                     # s = max(s, s_lip)
 
                 # t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
@@ -508,7 +511,7 @@ class AdaLasso(SdeLearner):
 
                 s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
                 if backtracking:
-                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
+                    s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                 else:
                     s = s_lip
 
@@ -536,7 +539,7 @@ class AdaLasso(SdeLearner):
                 #
                 s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 if backtracking:
-                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
+                    s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                     #s = max(s, s_lip)
                 else:
                     s = s_lip

@@ -428,20 +428,21 @@ class Qmle(SdeLearner):
         except np.linalg.LinAlgError:
             return 10 * np.random.randn(len(self.sde.model.param))
 
-        # Jbs = np.array([self.model.der_foo["Jb"](*x, **param) for x in self.X[:-1]])
-        Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        # DSs = np.array([self.model.der_foo["DS"](*x, **param) for x in self.X[:-1]])
+                # DSs = np.array([self.model.der_foo["DS"](*x, **param) for x in self.X[:-1]])
 
         #DSs = np.moveaxis(self.sde.model.der_foo["DS"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        DAs = np.moveaxis(self.sde.model.der_foo["DA"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        CSs = np.einsum('npdu, neu -> npde', DAs, self.As)
-        DSs = CSs + CSs.transpose((0, 1, 3, 2))
 
 
         if self.sde.model.npar_dr > 0:
+            # Jbs = np.array([self.model.der_foo["Jb"](*x, **param) for x in self.X[:-1]])
+            Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
             grad_alpha = -2 * np.matmul(self.DXS_inv, Jbs)[:, 0, :]
 
         if self.sde.model.npar_di > 0 :
+            DAs = np.moveaxis(self.sde.model.der_foo["DA"](*self.X[self.batch_id].transpose(), **param), -1, 0)
+            CSs = np.einsum('npdu, neu -> npde', DAs, self.As)
+            DSs = CSs + CSs.transpose((0, 1, 3, 2))
+
             GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
             grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
             GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
