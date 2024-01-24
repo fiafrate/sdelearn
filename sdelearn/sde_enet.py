@@ -355,6 +355,7 @@ class AdaElasticNet(SdeLearner):
     def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
                           opt_alg="mAPG",
                           backtracking=False,
+                          s_ini = 10,
                           **kwargs):
         """
         compute proximal gradient algorithms for regularization path optimization.
@@ -366,6 +367,7 @@ class AdaElasticNet(SdeLearner):
         :param opt_alg: choose optimization algorithm: either "mAPG" (monotone APG as in Li, Lin 2015), "cyclic" (coordinate-wise with custom order) or "block_wise"
             if sde model has block paramters (currently not implemented)
         :param backtracking: boolean, if true use backtracking to determine stepsize, otherwise use relevant lip constant
+        :param s_ini: initial stepsize value
         :param kwargs
         :return: dict 'x': last x point reached, 'f': loss function at x, 'status': convergence status 0/1,
             'message': convergence message, 'niter': number of iterations,\
@@ -394,6 +396,7 @@ class AdaElasticNet(SdeLearner):
         padding = np.ones_like(par_ini)
 
         assert opt_alg in ["mAPG", "cyclic", "block_wise"], 'invalid opt_alg'
+        assert not (opt_alg == 'block_wise' and len(self.group_names)==1) , 'invalid opt_alg'
 
         block_end = True
 
