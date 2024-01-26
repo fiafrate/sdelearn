@@ -82,18 +82,17 @@ class Sde:
 
         return self
 
-    def plot(self, save_fig=None):
-        '''
-
-        :param save_fig: either None (default) in which case figure is shown, or string containing file name to save the plot
-        :return:
-        '''
-        #plt.figure()
-        # plt.plot(self.sampling.grid, self.data.data)
+    def plot(self, save_fig=None, **kwargs):
+        """
+        :param save_fig: either None (default) in which case figure is shown, or string naming the file
+        the plot will be saved in
+        :param kwargs: optional graphical parameters, see pandas plot for reference
+        :return: self
+        """
         if save_fig is None:
-            self.data.data.plot()
+            self.data.data.plot(**kwargs)
         else:
-            self.data.data.plot().figure.savefig(save_fig)
+            self.data.data.plot(**kwargs).figure.savefig(save_fig)
         return self
 
     def __str__(self):

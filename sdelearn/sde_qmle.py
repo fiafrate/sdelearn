@@ -46,8 +46,8 @@ class Qmle(SdeLearner):
             or any method supported by scipy.optimize
         :param two_step: boolean, whether to perform two-step optimization (diffusion first, then drift) as in
         Yoshida, Nakahiro. "Quasi-likelihood analysis and its applications." Statistical Inference for Stochastic Processes 25.1 (2022): 43-60.
-        :param hess_exact: use exact computation of the hessian (only in symbolic mode) or use approximation returned by
-        scipy.optimize
+        :param hess_exact: use exact computation of the hessian (only in symbolic mode) or use gradient approximation. Available
+            only if second derivatives are available in sde.model, otherwise ignored
         :param kwargs: additional parameters passed over to optimizers
         :return: self, after updating self.optim_info, self.est, self.vcov
         """
@@ -56,6 +56,10 @@ class Qmle(SdeLearner):
         # if one of the parameter groups is missing necessarily use two step
         if len(self.sde.model.drift_par) == 0 or len(self.sde.model.diff_par) == 0:
             two_step = True
+
+        # if second derivatives are not available use hess approx
+        if self.sde.model.options['hess'] == False:
+            hess_exact = False
 
         # catch args
         self.optim_info['args'] = {'method': method, 'two_step': two_step, 'hess_exact': hess_exact, **kwargs}
@@ -196,7 +200,13 @@ class Qmle(SdeLearner):
                     else:
                         gs = self.gradient(self.est, ret_sample=True)
                         self.optim_info["hess"] = np.tensordot(gs, gs, (0,0)) * (self.sde.data.n_obs - 1)
-                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
+                        try:
+                            self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
+                        except np.linalg.LinAlgError:
+                            warnings.warn(
+                                'Singular matrix occurred during optimization. Try a different starting point.\n')
+
+
 
 
                         #end two step estimation

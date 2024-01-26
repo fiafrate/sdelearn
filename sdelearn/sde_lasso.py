@@ -12,7 +12,7 @@ import copy
 
 
 class AdaLasso(SdeLearner):
-    def __init__(self, sde, base_estimator, lsa=True, weights=None, delta=0, penalty=None, n_pen=100, **kwargs):
+    def __init__(self, sde, base_estimator, lsa=True, weights=None, delta=0, penalty=None, n_pen=100, adaptive=True, **kwargs):
         """
 
         :param sde: a Sde object
@@ -26,6 +26,7 @@ class AdaLasso(SdeLearner):
         :param penalty: grid of lambda values at which to evaluate the solution path which must include 0, defaults to None meaning that
             100 log-spaced values will be used from 0 to lambda_max
         :param n_pen: number of penalty values to consider (counting 0, ignored if a penalty vector is supplied)
+        :param adaptive: If False turns the lasso estimator into a non-adaptive one.  Necessarily True in lsa mode
         :**kwargs: arguments to be passed to fit method of base estimator if not already fitted, or options for thresholding algorithms
         """
         super().__init__(sde=sde)
@@ -41,53 +42,70 @@ class AdaLasso(SdeLearner):
             if base_estimator == 'Qmle':
                 self.base_est = Qmle(sde)
 
-        # fit base estimator if not already fitted
-        if self.base_est.est is None:
-            self.base_est.fit(**kwargs)
-            self.ini_est = self.base_est.est
-        else:
-            self.ini_est = self.base_est.est
-
-        # extract hessian matrix at max point
-        self.ini_hess0 = self.base_est.optim_info['hess']
-        # fix hessian matrix if not symmetric positive definite
-        self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
-        v, a = np.linalg.eigh(self.ini_hess0)
-        # set to zero negative eigs + some small noise (closest SPD approx)
-        v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
-        # replace neg eigvals  with positive vales
-        # v[v < 0] = np.abs(v[v < 0])
-        # lipschitz constant of quadratic part
-        self.lip = np.max(v)
-        self.ini_hess = a @ np.diag(v) @ a.transpose()
-
-        # info about parameter groups, used in block estimate
-
-        # names in initial est
-        self.ini_names = list(self.ini_est.keys())
-        # indices of names per group
-        self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
-        self.group_names = list(self.group_idx.keys())
-        # setup block lipschitiz contants
-        block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
-        self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
-
-        # setup weights
-        self.delta = delta
-        self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
-
-        self.w_ada = np.array(list(self.weights.values())) / \
-                     np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
-
         self.lsa = lsa
+        self.adaptive = adaptive
+
+        if self.lsa:
+            self.adaptive = True
+
+        if self.adaptive:
+            # LSA MODE: fit base estimator if not already fitted
+            if self.base_est.est is None:
+                self.base_est.fit(**kwargs)
+                self.ini_est = self.base_est.est
+            else:
+                self.ini_est = self.base_est.est
+
+
+            # extract hessian matrix at max point
+            self.ini_hess0 = self.base_est.optim_info['hess']
+            # fix hessian matrix if not symmetric positive definite
+            self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
+            v, a = np.linalg.eigh(self.ini_hess0)
+            # set to zero negative eigs + some small noise (closest SPD approx)
+            v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+            # replace neg eigvals  with positive vales
+            # v[v < 0] = np.abs(v[v < 0])
+            # lipschitz constant of quadratic part
+            self.lip = np.max(v)
+            self.ini_hess = a @ np.diag(v) @ a.transpose()
+
+            # info about parameter groups, used in block estimate
+
+            # names in initial est
+            self.ini_names = list(self.ini_est.keys())
+            # indices of names per group
+            self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            self.group_names = list(self.group_idx.keys())
+            # setup block lipschitiz contants
+            block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
+            self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
+
+            # setup weights
+            self.delta = delta
+            self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
+
+            self.w_ada = np.array(list(self.weights.values())) / \
+                         np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
+
+        else:
+            # if not adaptive store param names and groups from sde object
+            self.ini_names = self.sde.model.param
+            self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            self.group_names = list(self.group_idx.keys())
+            self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
+            # not truly adaptive, just keep the name for compatibility
+            self.w_ada = np.array(list(self.weights.values()))
+
 
         if lsa:
             self.lambda_max = np.linalg.norm(self.ini_hess @ np.array(list(self.ini_est.values())) / self.w_ada,
                                              ord=np.inf)
         else:
             self.lambda_max = np.linalg.norm(
-                self.base_est.grad_wrap(np.zeros(len(self.ini_est)), self.base_est) / self.w_ada,
+                self.base_est.grad_wrap(np.zeros(len(self.ini_names)), self.base_est) / self.w_ada,
                 ord=np.inf)
+
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
         # lambda corresponding to min cv score ("lambda.min")
@@ -103,10 +121,11 @@ class AdaLasso(SdeLearner):
             self.penalty = np.sort(penalty)
 
         # initialize solution path
-        self.est_path = np.empty((len(self.penalty), len(self.ini_est)))
-        self.est_path[0] = np.array(list(self.ini_est.values()))
+        self.est_path = np.empty((len(self.penalty), len(self.ini_names)))
+        if self.adaptive:
+            self.est_path[0] = np.array(list(self.ini_est.values()))
         # last value set as zero -- try to estimate backwards
-        self.est_path[self.n_pen - 1] = np.zeros(len(self.ini_est.values()))
+        self.est_path[self.n_pen - 1] = np.zeros(len(self.ini_names))
         # details on optim_info results
         self.path_info = [None] * (self.n_pen - 2)
 
@@ -371,7 +390,9 @@ class AdaLasso(SdeLearner):
             'message': convergence message, 'niter': number of iterations,\
                 'jac': gradient of f at x, 'epsilon': epsilon}
         '''
-        par_ini = np.array(list(self.ini_est.values()))
+
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
         w_a = self.w_ada
 
         it_count = 1
@@ -391,7 +412,7 @@ class AdaLasso(SdeLearner):
             y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
             y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
 
-        padding = np.ones_like(par_ini)
+        padding = np.ones_like(x0)
 
         assert opt_alg in ["fista", "cyclic", "block_wise"], 'invalid opt_alg'
         assert not (opt_alg == 'block_wise' and len(self.group_names)==1) , 'invalid opt_alg'

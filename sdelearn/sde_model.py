@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import sympy as sym
 
@@ -10,14 +12,30 @@ class SdeModel:
     - Supports both symbolic (default) and functional modes.
 
     """
-    def __init__(self, drift, diff, mod_shape=None, par_names=None, state_var=None, mode='sym'):
-
-        '''
-                if mode is not "fun" (meaning mode="sym", the default expected behavior)
-                 either parameter names or var names should be inferred from expressions
-        :param par_names: dictionary with keys 'drift' and 'diffusion' containing list of characters naming parameters
-        '''
+    def __init__(self, drift, diff, mod_shape=None, par_names=None, state_var=None, mode='sym', options={}):
+        """
+        :param dift: either symbolic expression, if mode == 'sym', or function, if mode == 'fun', modelling the drift
+        :param diff: either symbolic expression, if mode == 'sym', or function, if mode == 'fun', modelling the diffusion
+        :param par_names: dictionary with keys 'drift' and 'diffusion' containing list of characters naming parameters,
+                to be supplied in functional mode, ignored in symbolic mode
+        :param mod_shape: tuple (n_var, n_noise), to be supplied only in fun mode
+        :param state_var: list of variables names in the equations. If None, x0, ..., x_nvar will be taken.
+            It should not be None in symbolic mode
+        :param mode: either 'fun' or 'sym'
+        :param options: dictionary with keys
+            - 'hess', boolean values, controls if second derivatives are computed (in 'sym' mode)
+        """
         self.mode = mode
+
+        self.options = {'hess': False}
+        if options is not None:
+            o_l = list(self.options.keys())
+            for k, v in options.items():
+                if k in o_l:
+                    self.options[k] = v
+                else:
+                    warnings.warn('unknown Model option ' + k)
+
         if mode == 'sym':
             self.n_var = len(drift)
             self.n_noise = len(diff[0])
@@ -139,9 +157,12 @@ class SdeModel:
             n0 = np.full(Jb_expr.shape, self.null_expr)
             Jb_expr = Jb_expr + n0
 
-            Hb_expr = np.array(
-                [[[expr.diff(param1, param2) + self.null_expr
-                   for param1 in self.drift_par] for param2 in self.drift_par] for expr in self.b_expr])
+            if self.options.get('hess') or self.options.get('hess') is None:
+                Hb_expr = np.array(
+                    [[[expr.diff(param1, param2) + self.null_expr
+                       for param1 in self.drift_par] for param2 in self.drift_par] for expr in self.b_expr])
+            else:
+                Hb_expr = [[[0]]]
         else:
             Jb_expr = [[0]]
             Hb_expr = [[[0]]]
@@ -153,10 +174,13 @@ class SdeModel:
             n0 = np.full(DA_expr.shape, self.null_expr)
             DA_expr = DA_expr + n0
 
-            HA_expr = derive_by_array(DA_expr, sym.symbols(self.diff_par))
-            n0 = np.full(HA_expr.shape, self.null_expr)
-            HA_expr = HA_expr + n0
-            # HS_expr = np.array(
+            if self.options.get('hess') or self.options.get('hess') is None:
+                HA_expr = derive_by_array(DA_expr, sym.symbols(self.diff_par))
+                n0 = np.full(HA_expr.shape, self.null_expr)
+                HA_expr = HA_expr + n0
+            else:
+                HA_expr = [[[[0]]]]
+                # HS_expr = np.array(
             #     [[[[expr.diff(param1, param2) + self.null_expr
             #         for expr in row] for row in self.S_expr] for param2 in self.diff_par] for param1 in self.diff_par])
         else:
