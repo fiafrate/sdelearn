@@ -414,7 +414,7 @@ class AdaLasso(SdeLearner):
         padding = np.ones_like(x0)
 
         assert opt_alg in ["fista", "cyclic", "block_wise"], 'invalid opt_alg'
-        assert not (opt_alg == 'block_wise' and len(self.group_names)==1) , 'invalid opt_alg'
+        assert not (opt_alg == 'block_wise' and len(self.group_names) == 1), 'invalid opt_alg'
 
         block_end = True
 
