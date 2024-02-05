@@ -114,7 +114,7 @@ class AdaLasso(SdeLearner):
         if penalty is None:
             self.n_pen = n_pen
             self.penalty = np.zeros(n_pen)
-            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_max), num=n_pen - 1))
+            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001*self.lambda_max), stop=np.log(self.lambda_max), num=n_pen - 1))
             self.penalty[n_pen - 1] = self.lambda_max
         else:
             self.n_pen = len(penalty)
@@ -176,7 +176,7 @@ class AdaLasso(SdeLearner):
 
         return jac_y
 
-    def fit(self, cv=None, nfolds=5, cv_metric="loss", **kwargs):
+    def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
         """
         :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
             - None no validation takes place.
@@ -192,7 +192,7 @@ class AdaLasso(SdeLearner):
         :param kwargs: additional arguments for controlling optimization. See description of `proximal_gradient`
         :return: self
         """
-        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, **kwargs}
+        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, 'backwards': backwards, **kwargs}
         # self.path_info = []
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
@@ -203,8 +203,7 @@ class AdaLasso(SdeLearner):
                 # eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
                 # kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
                 # compute est
-                cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i],
-                                                 **kwargs)
+                cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
                 # restore epsilon for next iteration
                 # kwargs.update(epsilon=eps_ini)
                 # store results
