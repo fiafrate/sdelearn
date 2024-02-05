@@ -418,9 +418,11 @@ class AdaLasso(SdeLearner):
 
         block_end = True
 
+        # initialize optimization algorithms
         if opt_alg == 'fista':
             t_prev = 1
-            s_lip = 0.9 / self.lip
+            if not backtracking:
+                s_lip = 0.9 / self.lip
         elif opt_alg == "cyclic":
             padding = np.zeros_like(x_prev)
             if self.lsa:
@@ -429,13 +431,16 @@ class AdaLasso(SdeLearner):
                 jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
-            s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
             block_end = False
+            if not backtracking:
+                s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+
         elif opt_alg == "block_wise":
             padding = np.zeros_like(x_prev, dtype=int)
             padding[self.group_idx[self.group_names[(it_count - 1) % len(self.group_names)]]] = 1
-            s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
             block_end = False
+            if not backtracking:
+                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
 
         # stepsize choice
         if backtracking:
@@ -529,11 +534,10 @@ class AdaLasso(SdeLearner):
                     # at the end of current cycle
                     block_end = True
 
-                s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
                 if backtracking:
                     s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                 else:
-                    s = s_lip
+                    s = 1 / np.diag(self.ini_hess)[padding == 1]
 
                 y_curr = np.copy(x_curr)
 
@@ -557,12 +561,11 @@ class AdaLasso(SdeLearner):
                     # at beginning of new cycle store prev values
                     x_prev = np.copy(x_curr)
                 #
-                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 if backtracking:
                     s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                     #s = max(s, s_lip)
                 else:
-                    s = s_lip
+                    s = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 y_curr = np.copy(x_curr)
                 if self.lsa:
                     jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
