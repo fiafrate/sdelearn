@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy import optimize
+import scipy as sp
 
 from .sdelearn import Sde
 from .sde_qmle import Qmle
@@ -12,11 +12,13 @@ import copy
 
 
 class AdaBridge(SdeLearner):
-    def __init__(self, sde, base_estimator, weights=None, q=0.5, delta=0, penalty=None, n_pen=100, **kwargs):
+    def __init__(self, sde, base_estimator, lsa=True, weights=None, q=0.5, delta=0, penalty=None, n_pen=100, hess_check=False, **kwargs):
         """
         Adaptive bridge estimator. Currently supports one q=1/2.
         :param sde: a Sde object
         :param base_estimator: a base estimator of class SdeLearner or a string naming a subclass for constructing one (e.g. Qmle)
+        :param lsa: if True uses least squares approximation to compute the lasso solution. Otherwise a penalty term is added to the loss
+            of base_est.
         :param weights: adaptive weights/penalties for each parameter, in the form of a dictionary `{param: value}`,
             defaults to None, in that case all weights are set to 1
         :param q: exponent of the lq penalty of the bridge estimator. Either a scalar or an array with same length
@@ -26,6 +28,7 @@ class AdaBridge(SdeLearner):
         :param penalty: grid of lambda values at which to evaluate the solution path, defaults to None meaning that
             100 log-spaced values will be used from 0 to lambda_max
         :param n_pen: number of penalty values to consider (counting 0, ignored if penalty is supplied)
+        :param hess_check: make sure hessian matrix is spd
         :**kwargs: arguments to be passed to fit method of base estimator if not already fitted
         """
         super().__init__(sde=sde)
@@ -34,6 +37,7 @@ class AdaBridge(SdeLearner):
         self.base_est = None
         self.ini_est = None
         self.ini_hess = None
+        self.lsa = lsa
 
         # instantiate base est if not already present
         if isinstance(base_estimator, SdeLearner):
@@ -49,18 +53,22 @@ class AdaBridge(SdeLearner):
         else:
             self.ini_est = self.base_est.est
 
-        # extract hessian matrix at max point
-        self.ini_hess0 = self.base_est.optim_info['hess']
-        # fix hessian matrix if not symmetric positive definite
-        self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
-        v, a = np.linalg.eigh(self.ini_hess0)
-        # set to zero negative eigs + some small noise (closest SPD approx)
-        v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
-        # replace neg eigvals  with positive vales
-        # v[v < 0] = np.abs(v[v < 0])
-        # lipschitz constant of quadratic part
-        self.lip = np.max(v)
-        self.ini_hess = a @ np.diag(v) @ a.transpose()
+            # extract hessian matrix at max point
+            self.ini_hess = self.base_est.optim_info['hess']
+            self.ini_hess = 0.5 * (self.ini_hess + self.ini_hess.T)
+            if hess_check:
+                # fix hessian matrix if not symmetric positive definite
+                v, a = sp.linalg.eigh(self.ini_hess)
+                # set to zero negative eigs + some small noise (closest SPD approx)
+                v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+                # replace neg eigvals  with positive vales
+                # v[v < 0] = np.abs(v[v < 0])
+                self.ini_hess = a @ np.diag(v) @ a.transpose()
+                # lipschitz constant of quadratic part
+                self.lip = np.max(v)
+            else:
+                self.lip = sp.linalg.eigvalsh(self.ini_hess,
+                                              subset_by_index=[self.ini_hess.shape[0] - 1, self.ini_hess.shape[0] - 1])[0]
 
         # info about parameter groups, used in block estimate
 
@@ -82,7 +90,11 @@ class AdaBridge(SdeLearner):
 
         # maximal lambda value (starting point for backward algorithms: self.proximal_gradient(0, lambda_max) = 0
         c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
-        grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
+        if self.lsa:
+            grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
+        else:
+            grad_0 = self.base_est.grad_wrap(np.zeros(len(self.ini_names)), self.base_est)
+
         self.lambda_maxBW = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / self.w_ada) * self.lip ** (q - 1)
 
         # forward lambda_max: kills last coef standing.
@@ -103,11 +115,13 @@ class AdaBridge(SdeLearner):
             self.n_pen = n_pen
 
             self.penaltyBW = np.zeros(n_pen)
-            self.penaltyBW[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_maxBW), num=n_pen - 1))
+            st_pen = np.min([0.001*self.lambda_maxBW, 0.001])
+            self.penaltyBW[1:] = np.exp(np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_maxBW), num=n_pen - 1))
             self.penaltyBW[n_pen - 1] = self.lambda_maxBW
 
+            st_pen = np.min([0.001 * self.lambda_maxFW, 0.001])
             self.penaltyFW = np.zeros(n_pen)
-            self.penaltyFW[1:] = np.exp(np.linspace(start=np.log(0.001), stop=np.log(self.lambda_maxFW), num=n_pen - 1))
+            self.penaltyFW[1:] = np.exp(np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_maxFW), num=n_pen - 1))
             self.penaltyFW[n_pen - 1] = self.lambda_maxFW
 
             self.penalty = None
@@ -147,7 +161,7 @@ class AdaBridge(SdeLearner):
     def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
         """
         :param backwards: compute solution path either backwards (starting from the zero solution at lambda_max) or
-            forwards (starting from initial estimate for lambda=0)
+            forwards (starting from initial estimate for lambda=0) [should be used only with lsa]
         :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
             - None no validation takes place.
             - cv in (0,1): proportion of obs to be used as validation. E.g. if cv = 0.1 the last 10% of
@@ -181,7 +195,7 @@ class AdaBridge(SdeLearner):
                     # compute est
                     cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
                     # store results
-                    self.path_info[self.n_pen - 4 - i] = cur_est
+                    self.path_info[self.n_pen - 3 - i] = cur_est
                     self.est_path[self.n_pen - 2 - i] = cur_est['x']
             else:
                 for i in range(len(self.est_path) - 1):

@@ -1,8 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy import optimize
-
+import scipy as sp
 from .sdelearn import Sde
 from .sde_qmle import Qmle
 from .sde_learner import SdeLearner
@@ -12,7 +11,7 @@ import copy
 
 
 class AdaLasso(SdeLearner):
-    def __init__(self, sde, base_estimator, lsa=True, weights=None, delta=0, penalty=None, n_pen=100, adaptive=True, **kwargs):
+    def __init__(self, sde, base_estimator, lsa=True, weights=None, delta=0, penalty=None, n_pen=100, adaptive=True, hess_check=False, **kwargs):
         """
 
         :param sde: a Sde object
@@ -27,6 +26,7 @@ class AdaLasso(SdeLearner):
             100 log-spaced values will be used from 0 to lambda_max
         :param n_pen: number of penalty values to consider (counting 0, ignored if a penalty vector is supplied)
         :param adaptive: If False turns the lasso estimator into a non-adaptive one.  Necessarily True in lsa mode
+        :param hess_check: make sure hessian matrix is spd
         :**kwargs: arguments to be passed to fit method of base estimator if not already fitted, or options for thresholding algorithms
         """
         super().__init__(sde=sde)
@@ -58,17 +58,24 @@ class AdaLasso(SdeLearner):
 
 
             # extract hessian matrix at max point
-            self.ini_hess0 = self.base_est.optim_info['hess']
-            # fix hessian matrix if not symmetric positive definite
-            self.ini_hess0 = 0.5 * (self.ini_hess0 + self.ini_hess0.T)
-            v, a = np.linalg.eigh(self.ini_hess0)
-            # set to zero negative eigs + some small noise (closest SPD approx)
-            v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
-            # replace neg eigvals  with positive vales
-            # v[v < 0] = np.abs(v[v < 0])
-            # lipschitz constant of quadratic part
-            self.lip = np.max(v)
-            self.ini_hess = a @ np.diag(v) @ a.transpose()
+            self.ini_hess = self.base_est.optim_info['hess']
+            self.ini_hess = 0.5 * (self.ini_hess + self.ini_hess.T)
+            if hess_check:
+                # fix hessian matrix if not symmetric positive definite
+                v, a = sp.linalg.eigh(self.ini_hess)
+                # set to zero negative eigs + some small noise (closest SPD approx)
+                v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+                # replace neg eigvals  with positive vales
+                # v[v < 0] = np.abs(v[v < 0])
+                self.ini_hess = a @ np.diag(v) @ a.transpose()
+                # lipschitz constant of quadratic part
+                self.lip = np.max(v)
+            else:
+                self.lip = sp.linalg.eigvalsh(self.ini_hess,
+                                              subset_by_index=[self.ini_hess.shape[0]-1, self.ini_hess.shape[0]-1])[0]
+
+
+
 
             # info about parameter groups, used in block estimate
 
@@ -199,13 +206,8 @@ class AdaLasso(SdeLearner):
 
         if cv is None:
             for i in range(len(self.est_path) - 2):
-                # fix epsilon:
-                # eps_ini = kwargs.get('epsilon') if kwargs.get('epsilon') is not None else 1e-03
-                # kwargs.update(epsilon=np.min([eps_ini, (self.penalty[i + 1] - self.penalty[i])]))
                 # compute est
                 cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
-                # restore epsilon for next iteration
-                # kwargs.update(epsilon=eps_ini)
                 # store results
                 self.path_info[self.n_pen - 3 - i] = cur_est
                 self.est_path[self.n_pen - 2 - i] = cur_est['x']
