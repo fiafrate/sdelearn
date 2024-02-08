@@ -4,6 +4,10 @@ import pandas as pd
 
 class SdeData:
     def __init__(self, data):
+        """
+        Create data object
+        :type data: array-like, must be supported for data.frame creation of the form DataFrame(data)
+        """
         self.original_data = data
         self.data = pd.DataFrame(data)
         self.n_obs = self.data.shape[0]

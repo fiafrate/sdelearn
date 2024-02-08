@@ -23,10 +23,12 @@ class Sde:
         self.model = model
         self.sampling = sampling  # modify grid according to data?
         self.data = data
-
         if data is not None:
             assert self.model.n_var == self.data.data.shape[1], 'Number of variables in model does not match the shape of data!'
             assert self.sampling.n == self.data.n_obs, 'Number of observation in sampling does not match the shape of data!'
+            self.data.format_data(time_index=self.sampling.grid, col_names=self.model.state_var)
+            self.sampling.x0 = np.array(self.data.data.iloc[0])
+
         # add checks on input!
 
     def set_sampling(self, initial, terminal, n=None, delta=None):
