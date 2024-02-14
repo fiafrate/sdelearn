@@ -12,7 +12,7 @@ import copy
 
 
 class AdaElasticNet(SdeLearner):
-    def __init__(self, sde, base_estimator, lsa=True, weights=None, q=1, delta=0, alpha=1, penalty=None, n_pen=100, hess_check=False, **kwargs):
+    def __init__(self, sde, base_estimator, lsa=True, weights=None, q=1, delta=0, alpha=1, penalty=None, n_pen=100, adaptive=True, hess_check=False, **kwargs):
         """
         Adaptive Elastic Net estimator.
         :param sde: a Sde object
@@ -22,9 +22,11 @@ class AdaElasticNet(SdeLearner):
         :param weights: adaptive weights/penalties for each parameter, in the form of a dictionary `{param: value}`,
             defaults to None, in that case all weights are set to 1
         :param q: exponent of the lq penalty of the bridge estimator. Either a scalar or an array with same length
-            as the parameter groups in Sde
+            as the parameter groups in Sde. Currently only q=1 is supported
         :param delta: adjusts adaptive penalties as w_i / |est_i|^delta, defaults to zero meaning the adaptive weights
         given in argument `weights` remain unchanged
+        :param alpha: in (0, 1], controls the mixing of elastic net penalty. alpha=1 corresponds to lasso,
+            alpha ->0 tends  to ridge-like estimator, alpha=0 is not supported.
         :param penalty: grid of lambda values at which to evaluate the solution path, defaults to None meaning that
             100 log-spaced values will be used from 0 to lambda_max
         :param n_pen: number of penalty values to consider (counting 0, ignored if penalty is supplied)
@@ -39,6 +41,8 @@ class AdaElasticNet(SdeLearner):
         self.ini_est = None
         self.ini_hess = None
         self.lsa = lsa
+        self.adaptive = adaptive
+
 
         # instantiate base est if not already present
         if isinstance(base_estimator, SdeLearner):
@@ -47,12 +51,21 @@ class AdaElasticNet(SdeLearner):
             if base_estimator == 'Qmle':
                 self.base_est = Qmle(sde)
 
-        # fit base estimator if not already fitted
-        if self.base_est.est is None:
-            self.base_est.fit(**kwargs)
-            self.ini_est = self.base_est.est
-        else:
-            self.ini_est = self.base_est.est
+
+        if self.lsa:
+            self.adaptive = True
+
+
+
+        if self.adaptive:
+            # LSA MODE: fit base estimator if not already fitted
+            if self.base_est.est is None:
+                self.base_est.fit(**kwargs)
+                self.ini_est = self.base_est.est
+            else:
+                self.ini_est = self.base_est.est
+
+            ini_arr = np.array(list(self.ini_est.values()))
 
             # extract hessian matrix at max point
             self.ini_hess = self.base_est.optim_info['hess']
@@ -69,90 +82,134 @@ class AdaElasticNet(SdeLearner):
                 self.lip = np.max(v)
             else:
                 self.lip = sp.linalg.eigvalsh(self.ini_hess,
-                                              subset_by_index=[self.ini_hess.shape[0] - 1, self.ini_hess.shape[0] - 1])[0]
+                                              subset_by_index=[self.ini_hess.shape[0]-1, self.ini_hess.shape[0]-1])[0]
 
-        # info about parameter groups, used in block estimate
 
-        # names in initial est
-        self.ini_names = list(self.ini_est.keys())
-        # indices of names per group
-        self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
-        self.group_names = list(self.group_idx.keys())
-        # setup block lipschitz contants
-        block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
-        self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
 
-        # setup weights
-        self.delta = delta
-        self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
 
-        self.w_ada = np.array(list(self.weights.values())) / \
-                     np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
+            # info about parameter groups, used in block estimate
+
+            # names in initial est
+            self.ini_names = list(self.ini_est.keys())
+            # indices of names per group
+            self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            self.group_names = list(self.group_idx.keys())
+            # setup block lipschitiz contants
+            block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
+            self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
+
+            # setup weights
+            self.delta = delta
+            self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
+
+            self.w_ada = np.array(list(self.weights.values())) / \
+                         np.power(np.abs(ini_arr), delta)
+
+        else:
+            # if not adaptive store param names and groups from sde object
+            self.ini_names = self.sde.model.param
+            self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            self.group_names = list(self.group_idx.keys())
+            self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
+            # not truly adaptive, just keep the name for compatibility
+            self.w_ada = np.array(list(self.weights.values()))
+
 
         # maximal lambda value (starting point for backward algorithms: self.proximal_gradient(0, lambda_max) = 0
         #c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
-        c_q = 1
-        grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
-        self.lambda_maxBW = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / (self.alpha * self.w_ada)) * self.lip ** (q - 1)
 
-        # forward lambda_max: kills last coef standing.
-        # a_ql = (q * self.w_ada) ** (1 / (2 - q)) * (
-        #             np.diag(self.ini_hess) ** ((1 - q) / (2 - q)) * (1 - q) ** (1 / (2 - q)) + (
-        #                 (1 - q) / np.diag(self.ini_hess)) ** ((q - 1) / (2 - q)))
 
-        # self.lambda_maxFW = np.max(np.abs(self.ini_hess @ np.array(list(self.ini_est.values())) / a_ql)) ** (2 - q)
-        self.lambda_maxFW = self.lambda_maxBW
-        # self.lambda_max = np.max(
-        #     np.power(np.abs(2 / 3 * self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)
+        if self.lsa:
+            grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
+        else:
+            grad_0 = self.base_est.grad_wrap(np.zeros(len(self.ini_names)), self.base_est)
+
+        self.lambda_max = np.max(np.abs(grad_0) / (self.alpha * self.w_ada))
+
+        self.lambda_ini = None
+        if self.adaptive:
+            self.lambda_ini = 0.5 * np.min(np.abs(ini_arr / self.w_ada)) * self.lip
+        else:
+            self.lambda_ini = 0.0001 * self.lambda_max
 
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
         # lambda corresponding to min cv score ("lambda.min")
         self.lambda_min = None
+
         if penalty is None:
             self.n_pen = n_pen
-
-            self.penaltyBW = np.zeros(n_pen)
-            self.penaltyBW[1:] = np.exp(np.linspace(start=np.log(0.001*self.lambda_maxBW), stop=np.log(self.lambda_maxBW), num=n_pen - 1))
-            self.penaltyBW[n_pen - 1] = self.lambda_maxBW
-
-            self.penaltyFW = np.zeros(n_pen)
-            self.penaltyFW[1:] = np.exp(np.linspace(start=np.log(0.001*self.lambda_maxBW), stop=np.log(self.lambda_maxFW), num=n_pen - 1))
-            self.penaltyFW[n_pen - 1] = self.lambda_maxFW
-
-            self.penalty = None
+            self.penalty = np.zeros(n_pen)
+            self.penalty[1:] = np.exp(
+                np.linspace(start=np.log(self.lambda_ini), stop=np.log(self.lambda_max), num=n_pen - 1))
+            self.penalty[n_pen - 1] = self.lambda_max
         else:
             self.n_pen = len(penalty)
             self.penalty = np.sort(penalty)
-            self.penaltyBW = self.penalty
-            self.penaltyFW = self.penalty
 
         # initialize solution path
-        self.est_path = np.empty((self.n_pen, len(self.ini_est)))
-        self.est_path[0] = np.array(list(self.ini_est.values()))
+        self.est_path = np.empty((len(self.penalty), len(self.ini_names)))
+        if self.adaptive:
+            self.est_path[0] = ini_arr
         # last value set as zero -- try to estimate backwards
-        self.est_path[self.n_pen-1] = np.zeros(len(self.ini_est.values()))
+        self.est_path[self.n_pen - 1] = np.zeros(len(self.ini_names))
         # details on optim_info results
-        self.path_info = [None]*(self.n_pen-1)
+        self.path_info = [None] * (self.n_pen - 2)
 
         # info on CV
         self.val_loss = None
 
-    def loss(self, param, penalty=1):
+    def loss(self, param, penalty=1, **kwargs):
         """
-
-        :param param: param at which loss is computed
+        Adaptive Elastic Net loss function, using either exact base est loss or its quadratic approximation
+        :param param: parameter value at which loss is computed (supports dictionary or array, assuming that the order is consistent)
         :param penalty: constant penalty multiplying the adaptive weights
-        :return:
+        :param kwargs: additional arguments to be passed to base estimator loss fun
+        :return: scalar loss value
+
         """
-        par = np.array(list(param.values()))
-        par_ini = np.array(list(self.ini_est.values()))
+        if isinstance(param, dict):
+            par = np.array(list(param.values()))
+        else:
+            par = param
         w_a = self.w_ada
-        out = ((0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) +
-               penalty * self.alpha * np.linalg.norm(par * w_a,ord= self.q) ** self.q) +
-               penalty * 0.5 * (1 - self.alpha))
+
+        reg = penalty * (self.alpha * np.linalg.norm(par * w_a,ord= self.q) ** self.q
+                         + 0.5 * (1 - self.alpha) * np.linalg.norm(par * w_a,ord=2)**2)
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
+            out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + reg
+        else:
+            out = self.base_est.loss_wrap(par, self.base_est, **kwargs) + reg
+
 
         return out
+
+
+    def gradient(self, param, **kwargs):
+        """
+        Gradient of the *unpenalized* loss used to build a penalized estimator, either exact (e.g. quasi-likelihood)
+        or least square approximation, depending on how the learner was built. N.B. this does not coincide with the gradient
+        of self.loss (which is not differentiable). This is primarily used in backtracking.
+
+        :param param: value at which to compute gradient, either dict or np.array (with parameters assumed to be in
+            the same order initial estimate)
+        :param kwargs: additional arguments to be passed to base estimator loss
+        :return: numpy array of gradient vector
+        """
+
+        if isinstance(param, dict):
+            y = np.array(list(param.values()))
+        else:
+            y = param
+
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
+            jac_y = self.ini_hess @ (y - par_ini)
+        else:
+            jac_y = self.base_est.grad_wrap(y, self.base_est, **kwargs)
+
+        return jac_y
 
     def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
         """
@@ -173,34 +230,18 @@ class AdaElasticNet(SdeLearner):
         :return: self
         """
 
-        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, 'backwards': backwards, **kwargs}
+        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, **kwargs}
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
 
-        # fix penalty: if not supplied choose either forward or backward (has no effect if penalty is supplied)
-        if backwards:
-            self.penalty = self.penaltyBW
-        else:
-            self.penalty = self.penaltyFW
-
         if cv is None:
-            if backwards:
-                # last value set as zero -- try to estimate backwards
-                self.est_path[self.n_pen - 1] = np.zeros(len(self.ini_est.values()))
-                for i in range(len(self.est_path) - 2):
-                    # compute est
-                    cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i], **kwargs)
-                    # store results
-                    self.path_info[self.n_pen - 3 - i] = cur_est
-                    self.est_path[self.n_pen - 2 - i] = cur_est['x']
-            else:
-                for i in range(len(self.est_path) - 1):
-                    # fix epsilon:
-                    # compute est
-                    cur_est = self.proximal_gradient(self.est_path[i], self.penalty[i + 1], **kwargs)
-                    # store results
-                    self.path_info[i] = cur_est
-                    self.est_path[i + 1] = cur_est['x']
+            for i in range(len(self.est_path) - 2):
+                # compute est
+                cur_est = self.proximal_gradient(self.est_path[self.n_pen - 1 - i], self.penalty[self.n_pen - 2 - i],
+                                                 **kwargs)
+                # store results
+                self.path_info[self.n_pen - 3 - i] = cur_est
+                self.est_path[self.n_pen - 2 - i] = cur_est['x']
         elif 0 < cv < 1:
             n = self.sde.data.n_obs
             n_val = int(cv * n)
@@ -334,29 +375,31 @@ class AdaElasticNet(SdeLearner):
         return out
 
 
-    def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1):
+    def prox_backtrack(self, y_curr, penalty, gamma=0.8, s_ini=1, **kwargs):
 
-        par_ini = np.array(list(self.ini_est.values()))
-        w_a = self.w_ada
         s = s_ini
+        max_ls = 50  # max line search attempts
 
-        jac_y = self.ini_hess @ (y_curr - par_ini)
-        x_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
+        jac_y = self.gradient(y_curr)
+        x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+        x_par = dict(zip(self.sde.model.param, x_curr))
+        y_par = dict(zip(self.sde.model.param, y_curr))
 
-        g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
-        g_2 = 0.5 * (y_curr - par_ini) @ self.ini_hess @ (y_curr - par_ini)
-        qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
-                + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
-
-        if g_1 <= qs_12:
+        f_s = self.loss(x_par, penalty=0, **kwargs)
+        q_s = self.loss(y_par, penalty=0, **kwargs) + (x_curr - y_curr) @ jac_y \
+              + (0.5 / s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+        if f_s <= q_s:
             return s
+        k = 1
 
-        while g_1 > qs_12:
-            s = gamma * s
-            x_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
-            g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
-            qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
-                    + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+        while f_s > q_s and k < max_ls:
+            s *= gamma
+            x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
+            x_par = dict(zip(self.sde.model.param, x_curr))
+            f_s = self.loss(x_par, penalty=0, **kwargs)
+            q_s = self.loss(y_par, penalty=0, **kwargs) + (x_curr - y_curr) @ jac_y \
+                  + (0.5 / s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+            k += 1
 
         return s
 
@@ -381,12 +424,10 @@ class AdaElasticNet(SdeLearner):
             'message': convergence message, 'niter': number of iterations,\
                 'jac': gradient of f at x, 'epsilon': epsilon}
         """
-        par_ini = np.array(list(self.ini_est.values()))
-        w_a = self.w_ada
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
 
         it_count = 1
-        status = 1
-        message = ''
 
         x_prev = np.array(x0)
         y_curr = np.copy(x_prev)
@@ -401,77 +442,109 @@ class AdaElasticNet(SdeLearner):
             y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
             y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
 
-        padding = np.ones_like(par_ini)
+        padding = np.ones_like(x0)
 
-        assert opt_alg in ["mAPG", "cyclic", "block_wise"], 'invalid opt_alg'
-        assert not (opt_alg == 'block_wise' and len(self.group_names)==1) , 'invalid opt_alg'
+        assert opt_alg in ["fista", "cyclic", "block_wise"], 'invalid opt_alg'
+        assert not (opt_alg == 'block_wise' and len(self.group_names) == 1), 'invalid opt_alg'
 
         block_end = True
 
-        if opt_alg == 'mAPG':
-            t_prev = 1
-            s_lip = 0.9 / self.lip
+        # initialize optimization algorithms
+        if opt_alg == 'fista':
+            if self.adaptive:
+                s_lip = 0.9 / self.lip
         elif opt_alg == "cyclic":
             padding = np.zeros_like(x_prev)
-            jac_y = self.ini_hess @ (x_prev - par_ini)
+            if self.lsa:
+                jac_y = self.ini_hess @ (x_prev - par_ini)
+            else:
+                jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
-            s_lip = 0.9 / np.diag(self.ini_hess)[padding == 1]
             block_end = False
+            if self.adaptive:
+                s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+
         elif opt_alg == "block_wise":
             padding = np.zeros_like(x_prev, dtype=int)
             padding[self.group_idx[self.group_names[(it_count - 1) % len(self.group_names)]]] = 1
-            s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
             block_end = False
+            if self.adaptive:
+                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
 
         # stepsize choice
         if backtracking:
-            s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
-            s = max(s, s_lip)
+            s = self.prox_backtrack(y_curr, penalty=penalty, gamma=0.8, s_ini=s_ini)
+            # s = max(s, s_lip)
         else:
             s = s_lip
 
-        # compute full vector of updates even in coordinate/block case. Otherwise a
+        # compute full vector of updates even in coordinate/block case. Otherwise, a
         # single coordinate (or a block) doesn't change algorithm would stop, even if convergence is not reached!
         # x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
         # x_curr = np.where(padding == 1, x_soft, x_prev)
-        jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
+
+        if self.lsa:
+            jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
+        else:
+            jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)[padding == 1]
+
         x_curr = np.copy(x_prev)
-        x_curr[padding == 1] = self.soft_threshold(par=x_prev[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
+        x_curr[padding == 1] = self.soft_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
 
-        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
+        while (np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon or not block_end) and it_count < max_it:
 
+            if it_count % 100 == 1:
+                print(str(np.where(self.penalty == penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
+                print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
+                print('stepsize: ' + str(s))
             it_count += 1
 
-            if opt_alg == 'mAPG':
+            if opt_alg == 'fista':
 
                 if backtracking:
-                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
-                    s = max(s, s_lip)
+                    s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
+                    # print(s)
+                    # s = max(s, s_lip)
 
-                y_curr = x_curr + t_prev / t_curr * (z_curr - x_curr) + (t_prev - 1) / t_curr * (x_curr - x_prev)
-
+                # t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
                 #
-                jac_y = self.ini_hess @ (y_curr - par_ini)
-                jac_x = self.ini_hess @ (x_curr - par_ini)
-
-                z_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
-                v_curr = self.soft_threshold(par=x_curr - s * jac_x, penalty=penalty * s)
-
-                x_prev = np.copy(x_curr)
-                if self.loss(dict(zip(self.ini_est.keys(), z_curr))) <= self.loss(
-                        dict(zip(self.ini_est.keys(), v_curr))):
-                    x_curr = z_curr
-                else:
-                    x_curr = v_curr
-
+                # y_curr = x_curr + (t_prev - 1) / t_curr * (x_curr - x_prev)
+                #
+                # #
+                #
+                # if self.lsa:
+                #     jac_y = self.ini_hess @ (y_curr - par_ini)
+                # else:
+                #     jac_y = self.base_est.grad_wrap(y_curr, self.base_est, **kwargs)
+                #
+                # x_prev = np.copy(x_curr)
+                # x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
                 # x_curr = np.where(padding == 1, x_soft, x_prev)
-                if bounds is not None:
-                    x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
-                    x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
-
+                #
+                # t_prev = t_curr
                 t_prev = t_curr
                 t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
+                y_curr = x_curr + (t_prev - 1) / t_curr * (x_curr - x_prev)
+
+                # MONOTONE VARIANT -------------------------------------------
+                # y_curr = x_curr + t_prev / t_curr * (z_curr - x_curr) + (t_prev - 1) / t_curr * (x_curr - x_prev)
+                # jac_y = self.gradient(y_curr)
+                # jac_x = self.gradient(x_curr)
+                #
+                # z_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
+                # v_curr = self.soft_threshold(par=x_curr - s * jac_x, penalty=penalty * s)
+                #
+                # x_prev = np.copy(x_curr)
+                # if self.loss(z_curr) <= self.loss(v_curr):
+                #     x_curr = z_curr
+                # else:
+                #     x_curr = v_curr
+                #
+
+                x_prev = np.copy(x_curr)
+                jac_y = self.gradient(y_curr, **kwargs)
+                x_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
 
 
             elif opt_alg == "cyclic":
@@ -482,7 +555,7 @@ class AdaElasticNet(SdeLearner):
                 if np.argmax(padding) == cycle_start:
                     # at beginning of new cycle
                     block_end = True
-                    jac_y = self.ini_hess @ (x_prev - par_ini)
+                    jac_y = self.gradient(y_curr, **kwargs)
                     cycle_start = np.argmax(jac_y)
                     padding = np.zeros_like(x_prev)
                     padding[cycle_start] = 1
@@ -492,17 +565,17 @@ class AdaElasticNet(SdeLearner):
                     # at the end of current cycle
                     block_end = True
 
-                s_lip = 0.9 / np.diag(self.ini_hess)[padding == 1]
                 if backtracking:
-                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
-                    s = max(s, s_lip)
+                    s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                 else:
-                    s = s_lip
+                    s = 1 / np.diag(self.ini_hess)[padding == 1]
 
                 y_curr = np.copy(x_curr)
-                jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.soft_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s,
-                                                           padding=padding)
+                if self.lsa:
+                    jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
+                else:
+                    jac_y = self.base_est.grad_wrap(y_curr, self.base_est, **kwargs)[padding == 1]
+                x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
 
             elif opt_alg == "block_wise":
                 padding = np.zeros_like(x_prev, dtype=int)
@@ -517,23 +590,25 @@ class AdaElasticNet(SdeLearner):
                     # at beginning of new cycle store prev values
                     x_prev = np.copy(x_curr)
                 #
-                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 if backtracking:
-                    s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
-                    s = max(s, s_lip)
+                    s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
                 else:
-                    s = s_lip
+                    s = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 y_curr = np.copy(x_curr)
-                jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.soft_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s,
-                                                           padding=padding)
+
+                if self.lsa:
+                    jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
+                else:
+                    jac_y = self.base_est.grad_wrap(y_curr, self.base_est, **kwargs)[padding == 1]
+
+                x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
 
             # fix bounds
             if bounds is not None:
                 x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
                 x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
 
-        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip:
+        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon:
             message = 'Maximum number of iterations reached'
             status = 1
         else:
@@ -541,7 +616,7 @@ class AdaElasticNet(SdeLearner):
             status = 0
 
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
-                'jac': jac_y, 'epsilon': epsilon}
+                'jac': jac_y, 'epsilon': epsilon, 'stepsize': s}
 
     def plot(self, save_fig=None):
         plt.figure()

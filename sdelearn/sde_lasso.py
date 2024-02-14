@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import scipy as sp
+
 from .sdelearn import Sde
 from .sde_qmle import Qmle
 from .sde_learner import SdeLearner
@@ -34,6 +35,8 @@ class AdaLasso(SdeLearner):
         self.base_est = None
         self.ini_est = None
         self.ini_hess = None
+        self.lsa = lsa
+        self.adaptive = adaptive
 
         # instantiate base est if not already present
         if isinstance(base_estimator, SdeLearner):
@@ -42,8 +45,7 @@ class AdaLasso(SdeLearner):
             if base_estimator == 'Qmle':
                 self.base_est = Qmle(sde)
 
-        self.lsa = lsa
-        self.adaptive = adaptive
+
 
         if self.lsa:
             self.adaptive = True
@@ -56,6 +58,7 @@ class AdaLasso(SdeLearner):
             else:
                 self.ini_est = self.base_est.est
 
+            ini_arr = np.array(list(self.ini_est.values()))
 
             # extract hessian matrix at max point
             self.ini_hess = self.base_est.optim_info['hess']
@@ -93,7 +96,7 @@ class AdaLasso(SdeLearner):
             self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
 
             self.w_ada = np.array(list(self.weights.values())) / \
-                         np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
+                         np.power(np.abs(ini_arr), delta)
 
         else:
             # if not adaptive store param names and groups from sde object
@@ -105,13 +108,18 @@ class AdaLasso(SdeLearner):
             self.w_ada = np.array(list(self.weights.values()))
 
 
-        if lsa:
-            self.lambda_max = np.linalg.norm(self.ini_hess @ np.array(list(self.ini_est.values())) / self.w_ada,
-                                             ord=np.inf)
+        if self.lsa:
+            grad_0 = self.ini_hess @ np.array(list(self.ini_est.values()))
         else:
-            self.lambda_max = np.linalg.norm(
-                self.base_est.grad_wrap(np.zeros(len(self.ini_names)), self.base_est) / self.w_ada,
-                ord=np.inf)
+            grad_0 = self.base_est.grad_wrap(np.zeros(len(self.ini_names)), self.base_est)
+
+        self.lambda_max = np.linalg.norm(grad_0 / self.w_ada, ord=np.inf)
+
+        self.lambda_ini = None
+        if self.adaptive:
+            self.lambda_ini = 0.5 * np.min(np.abs(ini_arr/self.w_ada)) * self.lip
+        else:
+            self.lambda_ini = 0.0001 *self.lambda_max
 
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
@@ -121,7 +129,7 @@ class AdaLasso(SdeLearner):
         if penalty is None:
             self.n_pen = n_pen
             self.penalty = np.zeros(n_pen)
-            self.penalty[1:] = np.exp(np.linspace(start=np.log(0.001*self.lambda_max), stop=np.log(self.lambda_max), num=n_pen - 1))
+            self.penalty[1:] = np.exp(np.linspace(start=np.log(self.lambda_ini), stop=np.log(self.lambda_max), num=n_pen - 1))
             self.penalty[n_pen - 1] = self.lambda_max
         else:
             self.n_pen = len(penalty)
@@ -130,7 +138,7 @@ class AdaLasso(SdeLearner):
         # initialize solution path
         self.est_path = np.empty((len(self.penalty), len(self.ini_names)))
         if self.adaptive:
-            self.est_path[0] = np.array(list(self.ini_est.values()))
+            self.est_path[0] = ini_arr
         # last value set as zero -- try to estimate backwards
         self.est_path[self.n_pen - 1] = np.zeros(len(self.ini_names))
         # details on optim_info results
@@ -142,19 +150,23 @@ class AdaLasso(SdeLearner):
     def loss(self, param, penalty=1, **kwargs):
         """
         Adaptive LASSO loss function, using either exact base est loss or its quadratic approximation
-
-        :param param: parameter value at which loss is computed
+        :param param: parameter value at which loss is computed (supports dictionary or array, assuming that the order is consistent)
         :param penalty: constant penalty multiplying the adaptive weights
+        :param kwargs: additional arguments to be passed to base estimator loss fun
         :return: scalar loss value
         """
-        par = np.array(list(param.values()))
-        par_ini = np.array(list(self.ini_est.values()))
+
+        if isinstance(param, dict):
+            par = np.array(list(param.values()))
+        else:
+            par = param
         w_a = self.w_ada
 
         if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
             out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a, ord=1)
         else:
-            out = self.base_est.loss(param, **kwargs) + penalty * np.linalg.norm(par * w_a, ord=1)
+            out = self.base_est.loss_wrap(par, self.base_est, **kwargs) + penalty * np.linalg.norm(par * w_a, ord=1)
 
         return out
 
@@ -170,20 +182,20 @@ class AdaLasso(SdeLearner):
         :return: numpy array of gradient vector
         """
 
-        par_ini = np.array(list(self.ini_est.values()))
         if isinstance(param, dict):
             y = np.array(list(param.values()))
         else:
             y = param
 
         if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
             jac_y = self.ini_hess @ (y - par_ini)
         else:
             jac_y = self.base_est.grad_wrap(y, self.base_est, **kwargs)
 
         return jac_y
 
-    def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
+    def fit(self, cv=None, nfolds=5, cv_metric="loss", **kwargs):
         """
         :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
             - None no validation takes place.
@@ -199,7 +211,7 @@ class AdaLasso(SdeLearner):
         :param kwargs: additional arguments for controlling optimization. See description of `proximal_gradient`
         :return: self
         """
-        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, 'backwards': backwards, **kwargs}
+        self.optim_info['args'] = {'cv': cv, 'nfolds': nfolds, "cv_metric": cv_metric, **kwargs}
         # self.path_info = []
         # in this case start is initial estimate, assumed to be already in model order
         # and the bounds are assumed to be in the same order, so no check on the order is needed
@@ -339,38 +351,33 @@ class AdaLasso(SdeLearner):
         return np.sign(par) * np.maximum(np.abs(par) - penalty * w, 0)
 
     def prox_backtrack(self, y_curr, penalty, gamma=0.8, s_ini=1, **kwargs):
-
-        w_a = self.w_ada
         s = s_ini
-        max_ls = 10 # max line search attempts
+        max_ls = 50 # max line search attempts
 
         jac_y = self.gradient(y_curr)
         x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
         x_par = dict(zip(self.sde.model.param, x_curr))
         y_par = dict(zip(self.sde.model.param, y_curr))
 
-        f_s = self.loss(x_par)
-        q_s = self.base_est.loss(y_par) + (x_curr - y_curr) @ jac_y \
-            + 0.5 / s * np.linalg.norm(x_curr - y_curr, ord=2) ** 2 \
-            + penalty * np.linalg.norm(x_curr*w_a, ord=1)
-
+        f_s = self.loss(x_par, penalty=0, **kwargs)
+        q_s = self.loss(y_par, penalty=0, **kwargs) + (x_curr - y_curr) @ jac_y \
+            + (0.5 / s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
         if f_s <= q_s:
             return s
         k = 1
 
         while f_s > q_s and k < max_ls:
-            s = gamma * s
+            s *= gamma
             x_curr = self.soft_threshold(y_curr - s * jac_y, penalty * s)
             x_par = dict(zip(self.sde.model.param, x_curr))
-            f_s = self.loss(x_par)
-            q_s = self.base_est.loss(y_par) + (x_curr - y_curr) @ jac_y \
-                  + 0.5 / s * np.linalg.norm(x_curr - y_curr, ord=2) ** 2 \
-                  + penalty * np.linalg.norm(x_curr * w_a, ord=1)
+            f_s = self.loss(x_par, penalty=0, **kwargs)
+            q_s = self.loss(y_par, penalty=0, **kwargs) + (x_curr - y_curr) @ jac_y \
+                  + (0.5 / s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
             k += 1
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1e3, bounds=None,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-06, max_it=1e3, bounds=None,
                           opt_alg="fista",
                           backtracking=False,
                           s_ini = 10,
@@ -379,7 +386,7 @@ class AdaLasso(SdeLearner):
         compute proximal gradient algorithms for regularization path optimization.
         :param x0: array-like starting point
         :param penalty: value penalty parameter
-        :param epsilon: relative convergence factor: converge if ||x_prev - x_curr|| < 0.5 * epsilon / Lip_const
+        :param epsilon: relative convergence factor: converge if ||x_prev - x_curr|| < epsilon
         :param max_it: maximum number of iterations allowed
         :param bounds: matrix-like, parameter bounds with rows [par_min, par_max]
         :param opt_alg: choose optimization algorithm: either "fista", "cyclic" (coordinate-wise with custom order) or "block_wise"
@@ -394,11 +401,8 @@ class AdaLasso(SdeLearner):
 
         if self.lsa:
             par_ini = np.array(list(self.ini_est.values()))
-        w_a = self.w_ada
 
         it_count = 1
-        status = 1
-        message = ''
 
         x_prev = np.array(x0)
         y_curr = np.copy(x_prev)
@@ -422,8 +426,7 @@ class AdaLasso(SdeLearner):
 
         # initialize optimization algorithms
         if opt_alg == 'fista':
-            t_prev = 1
-            if not backtracking:
+            if self.adaptive:
                 s_lip = 0.9 / self.lip
         elif opt_alg == "cyclic":
             padding = np.zeros_like(x_prev)
@@ -434,19 +437,19 @@ class AdaLasso(SdeLearner):
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
             block_end = False
-            if not backtracking:
+            if self.adaptive:
                 s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
 
         elif opt_alg == "block_wise":
             padding = np.zeros_like(x_prev, dtype=int)
             padding[self.group_idx[self.group_names[(it_count - 1) % len(self.group_names)]]] = 1
             block_end = False
-            if not backtracking:
+            if self.adaptive:
                 s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
 
         # stepsize choice
         if backtracking:
-            s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s_ini)
+            s = self.prox_backtrack(y_curr, penalty=penalty, gamma=0.8,  s_ini=s_ini)
             # s = max(s, s_lip)
         else:
             s = s_lip
@@ -460,17 +463,25 @@ class AdaLasso(SdeLearner):
             jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
         else:
             jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)[padding == 1]
+
         x_curr = np.copy(x_prev)
         x_curr[padding == 1] = self.soft_threshold(x_prev[padding == 1] - s * jac_y, penalty * s, padding)
 
-        while (np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip or not block_end) and it_count < max_it :
+        while (np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon or not block_end) and it_count < max_it :
 
+
+            if it_count % 100 == 1:
+                print(str(np.where(self.penalty==penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
+                print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
+                print('stepsize: ' + str(s))
             it_count += 1
+
 
             if opt_alg == 'fista':
 
                 if backtracking:
                     s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
+                    # print(s)
                     # s = max(s, s_lip)
 
                 # t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
@@ -489,29 +500,30 @@ class AdaLasso(SdeLearner):
                 # x_curr = np.where(padding == 1, x_soft, x_prev)
                 #
                 # t_prev = t_curr
-                y_curr = x_curr + t_prev / t_curr * (z_curr - x_curr) + (t_prev - 1) / t_curr * (x_curr - x_prev)
-
-                #
-                jac_y = self.gradient(y_curr)
-                jac_x = self.gradient(x_curr)
-
-                z_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
-                v_curr = self.soft_threshold(par=x_curr - s * jac_x, penalty=penalty * s)
-
-                x_prev = np.copy(x_curr)
-                if self.loss(dict(zip(self.ini_est.keys(), z_curr))) <= self.loss(
-                        dict(zip(self.ini_est.keys(), v_curr))):
-                    x_soft = z_curr
-                else:
-                    x_soft = v_curr
-
-                x_curr = np.where(padding == 1, x_soft, x_prev)
-                if bounds is not None:
-                    x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
-                    x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
-
                 t_prev = t_curr
                 t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
+                y_curr = x_curr + (t_prev - 1) / t_curr * (x_curr - x_prev)
+
+
+                # MONOTONE VARIANT -------------------------------------------
+                # y_curr = x_curr + t_prev / t_curr * (z_curr - x_curr) + (t_prev - 1) / t_curr * (x_curr - x_prev)
+                # jac_y = self.gradient(y_curr)
+                # jac_x = self.gradient(x_curr)
+                #
+                # z_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
+                # v_curr = self.soft_threshold(par=x_curr - s * jac_x, penalty=penalty * s)
+                #
+                # x_prev = np.copy(x_curr)
+                # if self.loss(z_curr) <= self.loss(v_curr):
+                #     x_curr = z_curr
+                # else:
+                #     x_curr = v_curr
+                #
+
+                x_prev = np.copy(x_curr)
+                jac_y = self.gradient(y_curr, **kwargs)
+                x_curr = self.soft_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
+
 
             elif opt_alg == "cyclic":
                 # auxiliary vector y_curr is updated coordinate-wise.
@@ -521,12 +533,7 @@ class AdaLasso(SdeLearner):
                 if np.argmax(padding) == cycle_start:
                     # at beginning of new cycle
                     block_end = True
-
-                    if self.lsa:
-                        jac_y = self.ini_hess @ (x_prev - par_ini)
-                    else:
-                        jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)
-
+                    jac_y = self.gradient(y_curr, **kwargs)
                     cycle_start = np.argmax(jac_y)
                     padding = np.zeros_like(x_prev)
                     padding[cycle_start] = 1
@@ -542,12 +549,10 @@ class AdaLasso(SdeLearner):
                     s = 1 / np.diag(self.ini_hess)[padding == 1]
 
                 y_curr = np.copy(x_curr)
-
                 if self.lsa:
                     jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
                 else:
                     jac_y = self.base_est.grad_wrap(y_curr, self.base_est, **kwargs)[padding == 1]
-
                 x_curr[padding == 1] = self.soft_threshold(y_curr[padding == 1] - s * jac_y, penalty * s, padding)
 
             elif opt_alg == "block_wise":
@@ -565,10 +570,10 @@ class AdaLasso(SdeLearner):
                 #
                 if backtracking:
                     s = self.prox_backtrack(y_curr, penalty=penalty, s_ini=s)
-                    #s = max(s, s_lip)
                 else:
                     s = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 y_curr = np.copy(x_curr)
+
                 if self.lsa:
                     jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
                 else:
@@ -581,11 +586,11 @@ class AdaLasso(SdeLearner):
                 x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
                 x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
 
-        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip:
+        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon:
             message = 'Maximum number of iterations reached'
             status = 1
         else:
-            message = 'Success: relative gradient norm less than epsilon'
+            message = 'Success: increment norm smaller than threshold'
             status = 0
 
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,

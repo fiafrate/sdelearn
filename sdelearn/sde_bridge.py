@@ -12,9 +12,9 @@ import copy
 
 
 class AdaBridge(SdeLearner):
-    def __init__(self, sde, base_estimator, lsa=True, weights=None, q=0.5, delta=0, penalty=None, n_pen=100, hess_check=False, **kwargs):
+    def __init__(self, sde, base_estimator, lsa=True, adaptive=True, weights=None, q=0.5, delta=0, penalty=None, n_pen=100, hess_check=False, **kwargs):
         """
-        Adaptive bridge estimator. Currently supports one q=1/2.
+        Adaptive bridge estimator. Currently supports q=1/2.
         :param sde: a Sde object
         :param base_estimator: a base estimator of class SdeLearner or a string naming a subclass for constructing one (e.g. Qmle)
         :param lsa: if True uses least squares approximation to compute the lasso solution. Otherwise a penalty term is added to the loss
@@ -38,6 +38,8 @@ class AdaBridge(SdeLearner):
         self.ini_est = None
         self.ini_hess = None
         self.lsa = lsa
+        self.adaptive = adaptive
+
 
         # instantiate base est if not already present
         if isinstance(base_estimator, SdeLearner):
@@ -46,12 +48,20 @@ class AdaBridge(SdeLearner):
             if base_estimator == 'Qmle':
                 self.base_est = Qmle(sde)
 
-        # fit base estimator if not already fitted
-        if self.base_est.est is None:
-            self.base_est.fit(**kwargs)
-            self.ini_est = self.base_est.est
-        else:
-            self.ini_est = self.base_est.est
+        self.lsa = lsa
+
+        if self.lsa:
+            self.adaptive = True
+
+        if self.adaptive:
+            # LSA MODE: fit base estimator if not already fitted
+            if self.base_est.est is None:
+                self.base_est.fit(**kwargs)
+                self.ini_est = self.base_est.est
+            else:
+                self.ini_est = self.base_est.est
+
+            ini_arr = np.array(list(self.ini_est.values()))
 
             # extract hessian matrix at max point
             self.ini_hess = self.base_est.optim_info['hess']
@@ -70,23 +80,32 @@ class AdaBridge(SdeLearner):
                 self.lip = sp.linalg.eigvalsh(self.ini_hess,
                                               subset_by_index=[self.ini_hess.shape[0] - 1, self.ini_hess.shape[0] - 1])[0]
 
-        # info about parameter groups, used in block estimate
+            # info about parameter groups, used in block estimate
 
-        # names in initial est
-        self.ini_names = list(self.ini_est.keys())
-        # indices of names per group
-        self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
-        self.group_names = list(self.group_idx.keys())
-        # setup block lipschitz contants
-        block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
-        self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
+            # names in initial est
+            self.ini_names = list(self.ini_est.keys())
+            # indices of names per group
+            self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            self.group_names = list(self.group_idx.keys())
+            # setup block lipschitiz contants
+            block_hess = [self.ini_hess[self.group_idx.get(k)][:, self.group_idx.get(k)] for k in self.group_idx.keys()]
+            self.block_lip = np.array([np.linalg.eigvalsh(bh).max() for bh in block_hess])
 
-        # setup weights
-        self.delta = delta
-        self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
+            # setup weights
+            self.delta = delta
+            self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
 
-        self.w_ada = np.array(list(self.weights.values())) / \
-                     np.power(np.abs(np.array(list(self.ini_est.values()))), delta)
+            self.w_ada = np.array(list(self.weights.values())) / \
+                         np.power(np.abs(ini_arr), delta)
+
+        else:
+            # if not adaptive store param names and groups from sde object
+            self.ini_names = self.sde.model.param
+            self.group_idx = {k: [self.ini_names.index(par) for par in v] for k, v in self.sde.model.par_groups.items()}
+            self.group_names = list(self.group_idx.keys())
+            self.weights = weights if weights is not None else dict(zip(sde.model.param, [1] * len(sde.model.param)))
+            # not truly adaptive, just keep the name for compatibility
+            self.w_ada = np.array(list(self.weights.values()))
 
         # maximal lambda value (starting point for backward algorithms: self.proximal_gradient(0, lambda_max) = 0
         c_q = (2 * (1 - q)) ** (1 / (2 - q)) * (1 + 0.5 * q / (1 - q))
@@ -97,12 +116,12 @@ class AdaBridge(SdeLearner):
 
         self.lambda_maxBW = c_q ** (q - 2) * np.max(np.abs(grad_0) ** (2-q) / self.w_ada) * self.lip ** (q - 1)
 
-        # forward lambda_max: kills last coef standing.
-        a_ql = (q * self.w_ada) ** (1 / (2 - q)) * (
-                    np.diag(self.ini_hess) ** ((1 - q) / (2 - q)) * (1 - q) ** (1 / (2 - q)) + (
-                        (1 - q) / np.diag(self.ini_hess)) ** ((q - 1) / (2 - q)))
-
-        self.lambda_maxFW = np.max(np.abs(self.ini_hess @ np.array(list(self.ini_est.values())) / a_ql)) ** (2 - q)
+        if self.lsa:
+            # forward lambda_max: kills last coef standing.
+            a_ql = (q * self.w_ada) ** (1 / (2 - q)) * (
+                        np.diag(self.ini_hess) ** ((1 - q) / (2 - q)) * (1 - q) ** (1 / (2 - q)) + (
+                            (1 - q) / np.diag(self.ini_hess)) ** ((q - 1) / (2 - q)))
+            self.lambda_maxFW = np.max(np.abs(self.ini_hess @ np.array(list(self.ini_est.values())) / a_ql)) ** (2 - q)
 
         # self.lambda_max = np.max(
         #     np.power(np.abs(2 / 3 * self.ini_hess @ np.array(list(self.ini_est.values()))), 1.5) / self.w_ada)
@@ -119,10 +138,11 @@ class AdaBridge(SdeLearner):
             self.penaltyBW[1:] = np.exp(np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_maxBW), num=n_pen - 1))
             self.penaltyBW[n_pen - 1] = self.lambda_maxBW
 
-            st_pen = np.min([0.001 * self.lambda_maxFW, 0.001])
-            self.penaltyFW = np.zeros(n_pen)
-            self.penaltyFW[1:] = np.exp(np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_maxFW), num=n_pen - 1))
-            self.penaltyFW[n_pen - 1] = self.lambda_maxFW
+            if self.lsa:
+                st_pen = np.min([0.001 * self.lambda_maxFW, 0.001])
+                self.penaltyFW = np.zeros(n_pen)
+                self.penaltyFW[1:] = np.exp(np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_maxFW), num=n_pen - 1))
+                self.penaltyFW[n_pen - 1] = self.lambda_maxFW
 
             self.penalty = None
         else:
@@ -133,7 +153,8 @@ class AdaBridge(SdeLearner):
 
         # initialize solution path
         self.est_path = np.empty((self.n_pen, len(self.ini_est)))
-        self.est_path[0] = np.array(list(self.ini_est.values()))
+        if self.adaptive:
+            self.est_path[0] = np.array(list(self.ini_est.values()))
         # last value set as zero -- try to estimate backwards
         self.est_path[self.n_pen-1] = np.zeros(len(self.ini_est.values()))
         # details on optim_info results
@@ -142,21 +163,51 @@ class AdaBridge(SdeLearner):
         # info on CV
         self.val_loss = None
 
-    def loss(self, param, penalty=1):
+    def loss(self, param, penalty=1, **kwargs):
         """
 
-        :param param: param at which loss is computed
+        :param param: parameter value at which loss is computed (supports dictionary or array, assuming that the order is consistent)
         :param penalty: constant penalty multiplying the adaptive weights
-        :return:
+        :param kwargs: additional arguments to be passed to base estimator loss fun
+        :return: scalar loss value
         """
-        par = np.array(list(param.values()))
-        par_ini = np.array(list(self.ini_est.values()))
+        if isinstance(param, dict):
+            par = np.array(list(param.values()))
+        else:
+            par = param
+
         w_a = self.w_ada
-
-        out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a,
-                                                                                                 ord=self.q) ** self.q
-
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
+            out = 0.5 * (par - par_ini) @ self.ini_hess @ (par - par_ini) + penalty * np.linalg.norm(par * w_a, ord=self.q) ** self.q
+        else:
+            out = self.base_est.loss_wrap(par, self.base_est, **kwargs) + penalty * np.linalg.norm(par * w_a, ord=self.q) ** self.q
         return out
+
+    def gradient(self, param, **kwargs):
+        """
+        Gradient of the *unpenalized* loss used to build a penalized estimator, either exact (e.g. quasi-likelihood)
+        or least square approximation, depending on how the learner was built. N.B. this does not coincide with the gradient
+        of self.loss (which is not differentiable). This is primarily used in backtracking.
+
+        :param param: value at which to compute gradient, either dict or np.array (with parameters assumed to be in
+            the same order initial estimate)
+        :param kwargs: additional arguments to be passed to base estimator loss
+        :return: numpy array of gradient vector
+        """
+
+        if isinstance(param, dict):
+            y = np.array(list(param.values()))
+        else:
+            y = param
+
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
+            jac_y = self.ini_hess @ (y - par_ini)
+        else:
+            jac_y = self.base_est.grad_wrap(y, self.base_est, **kwargs)
+
+        return jac_y
 
     def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
         """
@@ -342,30 +393,32 @@ class AdaBridge(SdeLearner):
             # placeholder for future updates to general q-thresholding
             return np.ones_like(par)
 
-    def prox_backtrack(self, y_curr, gamma, penalty, s_ini=1):
+    def prox_backtrack(self, y_curr, penalty, gamma=0.8, s_ini=1, **kwargs):
 
-        par_ini = np.array(list(self.ini_est.values()))
-        w_a = self.w_ada
         s = s_ini
+        max_ls = 50  # max line search attempts
 
-        jac_y = self.ini_hess @ (y_curr - par_ini)
+        jac_y = self.gradient(y_curr)
         x_curr = self.hard_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
 
-        g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
-        g_2 = 0.5 * (y_curr - par_ini) @ self.ini_hess @ (y_curr - par_ini)
-        qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
-                + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+        x_par = dict(zip(self.sde.model.param, x_curr))
+        y_par = dict(zip(self.sde.model.param, y_curr))
 
-        if g_1 <= qs_12:
+        f_s = self.loss(x_par, penalty=0, **kwargs)
+        q_s = self.loss(y_par, penalty=0, **kwargs) + (x_curr - y_curr) @ jac_y \
+              + (0.5 / s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+        if f_s <= q_s:
             return s
+        k = 1
 
-        while g_1 > qs_12:
-            s = gamma * s
+        while f_s > q_s and k < max_ls:
+            s *= gamma
             x_curr = self.hard_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
-            g_1 = 0.5 * (x_curr - par_ini) @ self.ini_hess @ (x_curr - par_ini)
-            qs_12 = g_2 + (x_curr - y_curr) @ self.ini_hess @ (y_curr - par_ini) \
-                    + (1 / (2 * s)) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
-
+            x_par = dict(zip(self.sde.model.param, x_curr))
+            f_s = self.loss(x_par, penalty=0, **kwargs)
+            q_s = self.loss(y_par, penalty=0, **kwargs) + (x_curr - y_curr) @ jac_y \
+                  + (0.5 / s) * np.linalg.norm(x_curr - y_curr, ord=2) ** 2
+            k += 1
         return s
 
     def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
@@ -390,12 +443,10 @@ class AdaBridge(SdeLearner):
             'message': convergence message, 'niter': number of iterations,\
                 'jac': gradient of f at x, 'epsilon': epsilon}
         """
-        par_ini = np.array(list(self.ini_est.values()))
-        w_a = self.w_ada
+        if self.lsa:
+            par_ini = np.array(list(self.ini_est.values()))
 
         it_count = 1
-        status = 1
-        message = ''
 
         x_prev = np.array(x0)
         y_curr = np.copy(x_prev)
@@ -410,7 +461,7 @@ class AdaBridge(SdeLearner):
             y_curr[y_curr < bounds[0]] = bounds[0][y_curr < bounds[0]] + epsilon
             y_curr[y_curr > bounds[1]] = bounds[1][y_curr > bounds[1]] - epsilon
 
-        padding = np.ones_like(par_ini)
+        padding = np.ones_like(x0)
 
         assert opt_alg in ["mAPG", "cyclic", "block_wise"], 'invalid opt_alg'
         assert not (opt_alg == 'block_wise' and len(self.group_names)==1) , 'invalid opt_alg'
@@ -418,25 +469,30 @@ class AdaBridge(SdeLearner):
         block_end = True
 
         if opt_alg == 'mAPG':
-            t_prev = 1
-            s_lip = 0.9 / self.lip
+            if self.adaptive:
+                s_lip = 0.9 / self.lip
         elif opt_alg == "cyclic":
             padding = np.zeros_like(x_prev)
-            jac_y = self.ini_hess @ (x_prev - par_ini)
+            if self.lsa:
+                jac_y = self.ini_hess @ (x_prev - par_ini)
+            else:
+                jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)
             cycle_start = np.argmax(jac_y)
             padding[cycle_start] = 1
-            s_lip = 0.9 / np.diag(self.ini_hess)[padding == 1]
             block_end = False
+            if self.adaptive:
+                s_lip = 1 / np.diag(self.ini_hess)[padding == 1]
+
         elif opt_alg == "block_wise":
             padding = np.zeros_like(x_prev, dtype=int)
             padding[self.group_idx[self.group_names[(it_count - 1) % len(self.group_names)]]] = 1
-            s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
             block_end = False
+            if self.adaptive:
+                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
 
         # stepsize choice
         if backtracking:
-            s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty)
-            s = max(s, s_lip)
+            s = self.prox_backtrack(y_curr, penalty=penalty, gamma=0.8, s_ini=s_ini)
         else:
             s = s_lip
 
@@ -444,43 +500,47 @@ class AdaBridge(SdeLearner):
         # single coordinate (or a block) doesn't change algorithm would stop, even if convergence is not reached!
         # x_soft = self.soft_threshold(y_curr - s * jac_y, penalty * s)
         # x_curr = np.where(padding == 1, x_soft, x_prev)
-        jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
+
+        if self.lsa:
+            jac_y = self.ini_hess[padding == 1, :] @ (x_prev - par_ini)
+        else:
+            jac_y = self.base_est.grad_wrap(x_prev, self.base_est, **kwargs)[padding == 1]
+
         x_curr = np.copy(x_prev)
         x_curr[padding == 1] = self.hard_threshold(par=x_prev[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
-        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip and it_count < max_it or not block_end:
+        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon and it_count < max_it or not block_end:
 
+
+
+            if it_count % 100 == 1:
+                print(str(np.where(self.penalty==penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
+                print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
+                print('stepsize: ' + str(s))
             it_count += 1
+
+
 
             if opt_alg == 'mAPG':
 
                 if backtracking:
                     s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
-                    s = max(s, s_lip)
-
+                t_prev = t_curr
+                t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
                 y_curr = x_curr + t_prev / t_curr * (z_curr - x_curr) + (t_prev - 1) / t_curr * (x_curr - x_prev)
 
                 #
-                jac_y = self.ini_hess @ (y_curr - par_ini)
-                jac_x = self.ini_hess @ (x_curr - par_ini)
+                jac_y = self.gradient(y_curr, **kwargs)
+                jac_x = self.gradient(x_curr, **kwargs)
 
                 z_curr = self.hard_threshold(par=y_curr - s * jac_y, penalty=penalty * s)
                 v_curr = self.hard_threshold(par=x_curr - s * jac_x, penalty=penalty * s)
 
                 x_prev = np.copy(x_curr)
-                if self.loss(dict(zip(self.ini_est.keys(), z_curr))) <= self.loss(
-                        dict(zip(self.ini_est.keys(), v_curr))):
+                if self.loss(z_curr) <= self.loss(v_curr):
                     x_curr = z_curr
                 else:
                     x_curr = v_curr
-
-                # x_curr = np.where(padding == 1, x_soft, x_prev)
-                if bounds is not None:
-                    x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
-                    x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
-
-                t_prev = t_curr
-                t_curr = (1 + np.sqrt(1 + 4 * t_prev ** 2)) / 2
 
 
             elif opt_alg == "cyclic":
@@ -491,7 +551,7 @@ class AdaBridge(SdeLearner):
                 if np.argmax(padding) == cycle_start:
                     # at beginning of new cycle
                     block_end = True
-                    jac_y = self.ini_hess @ (x_prev - par_ini)
+                    jac_y = self.gradient(y_curr, **kwargs)
                     cycle_start = np.argmax(jac_y)
                     padding = np.zeros_like(x_prev)
                     padding[cycle_start] = 1
@@ -501,17 +561,18 @@ class AdaBridge(SdeLearner):
                     # at the end of current cycle
                     block_end = True
 
-                s_lip = 0.9 / np.diag(self.ini_hess)[padding == 1]
                 if backtracking:
                     s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
-                    s = max(s, s_lip)
                 else:
-                    s = s_lip
+                    s =  0.9 / np.diag(self.ini_hess)[padding == 1]
 
                 y_curr = np.copy(x_curr)
-                jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.hard_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s,
-                                                           padding=padding)
+                if self.lsa:
+                    jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
+                else:
+                    jac_y = self.base_est.grad_wrap(y_curr, self.base_est, **kwargs)[padding == 1]
+
+                x_curr[padding == 1] = self.hard_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
             elif opt_alg == "block_wise":
                 padding = np.zeros_like(x_prev, dtype=int)
@@ -525,24 +586,25 @@ class AdaBridge(SdeLearner):
                 elif it_count % len(self.group_names) == 1:
                     # at beginning of new cycle store prev values
                     x_prev = np.copy(x_curr)
-                #
-                s_lip = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 if backtracking:
                     s = self.prox_backtrack(y_curr, gamma=0.8, penalty=penalty, s_ini=s)
-                    s = max(s, s_lip)
                 else:
-                    s = s_lip
+                    s = 0.9 / self.block_lip[(it_count - 1) % len(self.group_names)]
                 y_curr = np.copy(x_curr)
-                jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
-                x_curr[padding == 1] = self.hard_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s,
-                                                           padding=padding)
+
+                if self.lsa:
+                    jac_y = self.ini_hess[padding == 1, :] @ (y_curr - par_ini)
+                else:
+                    jac_y = self.base_est.grad_wrap(y_curr, self.base_est, **kwargs)[padding == 1]
+
+                x_curr[padding == 1] = self.hard_threshold(par=y_curr[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
             # fix bounds
             if bounds is not None:
                 x_curr[x_curr < bounds[0]] = bounds[0][x_curr < bounds[0]] + epsilon
                 x_curr[x_curr > bounds[1]] = bounds[1][x_curr > bounds[1]] - epsilon
 
-        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon * 0.5 / self.lip:
+        if np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon:
             message = 'Maximum number of iterations reached'
             status = 1
         else:
@@ -550,7 +612,7 @@ class AdaBridge(SdeLearner):
             status = 0
 
         return {'x': x_curr, 'f': self.loss_wrap(x_curr, self), 'status': status, 'message': message, 'niter': it_count,
-                'jac': jac_y, 'epsilon': epsilon}
+                'jac': jac_y, 'epsilon': epsilon, 'stepsize': s}
 
     def plot(self, save_fig=None):
         plt.figure()
