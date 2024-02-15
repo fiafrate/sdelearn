@@ -133,7 +133,7 @@ class Qmle(SdeLearner):
                             beta_est = np.empty(self.sde.model.n_var)
                             for i in range(self.sde.model.n_var):
                                 mod_i = SdeModel([0], [[sym.simplify(self.sde.model.A_expr[i,i])]], state_var=[self.sde.model.state_var[i]])
-                                data_i = SdeData(self.sde.data.original_data[:,i].reshape(self.sde.data.n_obs, 1))
+                                data_i = SdeData(self.sde.data.data.iloc[:,i].to_numpy().reshape(self.sde.data.n_obs, 1))
                                 sde_i = Sde(sampling=self.sde.sampling,
                                             model=mod_i,
                                             data=data_i)

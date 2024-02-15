@@ -275,7 +275,7 @@ class AdaElasticNet(SdeLearner):
                         n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                         lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
                         val_loss[i] = \
-                            np.mean((lasso_tr.predict(sampling=sde_val.sampling,
+                            np.mean((lasso_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
                                                       n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
                 except:
                     pass
@@ -332,10 +332,9 @@ class AdaElasticNet(SdeLearner):
                         elif cv_metric == "mse":
                             lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
                             n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
-                            val_loss[i, k] = \
-                                np.mean((lasso_tr.predict(
-                                    sampling=sde_val.sampling,
-                                    n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
+                            pred = lasso_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
+                                                    n_rep=n_rep).to_numpy()
+                            val_loss[i, k] = np.mean((pred - sde_val.data.data.to_numpy()) ** 2)
                     except:
                         pass
 
@@ -407,6 +406,7 @@ class AdaElasticNet(SdeLearner):
                           opt_alg="mAPG",
                           backtracking=False,
                           s_ini = 10,
+                          verbose=False,
                           **kwargs):
         """
         compute proximal gradient algorithms for regularization path optimization.
@@ -494,10 +494,11 @@ class AdaElasticNet(SdeLearner):
 
         while (np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon or not block_end) and it_count < max_it:
 
-            if it_count % 100 == 1:
-                print(str(np.where(self.penalty == penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
-                print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
-                print('stepsize: ' + str(s))
+            if verbose:
+                if it_count % 100 == 1:
+                    print(str(np.where(self.penalty == penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
+                    print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
+                    print('stepsize: ' + str(s))
             it_count += 1
 
             if opt_alg == 'fista':

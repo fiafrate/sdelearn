@@ -288,9 +288,7 @@ class AdaBridge(SdeLearner):
                     elif cv_metric == "mse":
                         n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                         lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
-                        val_loss[i] = \
-                            np.mean((lasso_tr.predict(sampling=sde_val.sampling,
-                                                      n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
+                        val_loss[i] = np.mean((lasso_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(), n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
                 except:
                     pass
 
@@ -346,10 +344,9 @@ class AdaBridge(SdeLearner):
                         elif cv_metric == "mse":
                             lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
                             n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
-                            val_loss[i, k] = \
-                                np.mean((lasso_tr.predict(
-                                    sampling=sde_val.sampling,
-                                    n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
+                            pred = lasso_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
+                                                    n_rep=n_rep).to_numpy()
+                            val_loss[i, k] = np.mean((pred - sde_val.data.data.to_numpy()) ** 2)
                     except:
                         pass
 
