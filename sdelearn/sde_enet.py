@@ -127,11 +127,11 @@ class AdaElasticNet(SdeLearner):
         self.lambda_max = np.max(np.abs(grad_0) / (self.alpha * self.w_ada))
 
         self.lambda_ini = None
-        if self.adaptive:
-            self.lambda_ini = 0.5 * np.min(np.abs(ini_arr / self.w_ada)) * self.lip
-        else:
-            self.lambda_ini = 0.0001 * self.lambda_max
-
+        # if self.adaptive:
+        #     self.lambda_ini = 0.5 * np.min(np.abs(ini_arr / self.w_ada)) * self.lip
+        # else:
+        #     self.lambda_ini = 0.0001 * self.lambda_max
+        st_pen = np.min([n_pen**(-2) * self.lambda_max, 0.00001])
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
         # lambda corresponding to min cv score ("lambda.min")
@@ -141,7 +141,7 @@ class AdaElasticNet(SdeLearner):
             self.n_pen = n_pen
             self.penalty = np.zeros(n_pen)
             self.penalty[1:] = np.exp(
-                np.linspace(start=np.log(self.lambda_ini), stop=np.log(self.lambda_max), num=n_pen - 1))
+                np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_max), num=n_pen - 1))
             self.penalty[n_pen - 1] = self.lambda_max
         else:
             self.n_pen = len(penalty)
@@ -346,7 +346,7 @@ class AdaElasticNet(SdeLearner):
             self.fit(**kwargs)
 
             # compute final estimate using optimal lambda
-            self.lambda_opt = self.penalty[:-1][cv_loss < np.nanmin(cv_loss) + np.nanstd(val_loss)][-1]
+            self.lambda_opt = self.penalty[:-1][cv_loss < np.nanmin(cv_loss) + 0.5*np.nanstd(val_loss)][-1]
             self.lambda_min = self.penalty[np.nanargmin(cv_loss)]
             self.est = dict(
                 zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
@@ -403,7 +403,7 @@ class AdaElasticNet(SdeLearner):
         return s
 
     def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
-                          opt_alg="mAPG",
+                          opt_alg="fista",
                           backtracking=False,
                           s_ini = 10,
                           verbose=False,

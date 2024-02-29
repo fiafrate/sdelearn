@@ -116,20 +116,20 @@ class AdaLasso(SdeLearner):
         self.lambda_max = np.linalg.norm(grad_0 / self.w_ada, ord=np.inf)
 
         self.lambda_ini = None
-        if self.adaptive:
-            self.lambda_ini = 0.5 * np.min(np.abs(ini_arr/self.w_ada)) * self.lip
-        else:
-            self.lambda_ini = 0.0001 *self.lambda_max
+        # if self.adaptive:
+        #     self.lambda_ini = 0.5 * np.min(np.abs(ini_arr/self.w_ada)) * self.lip
+        # else:
+        #     self.lambda_ini = 0.0001 *self.lambda_max
 
         # optimal lambda value, computed after cross validation ("lambda.1se")
         self.lambda_opt = None
         # lambda corresponding to min cv score ("lambda.min")
         self.lambda_min = None
-
+        st_pen = np.min([n_pen**(-2) * self.lambda_max, 0.00001])
         if penalty is None:
             self.n_pen = n_pen
             self.penalty = np.zeros(n_pen)
-            self.penalty[1:] = np.exp(np.linspace(start=np.log(self.lambda_ini), stop=np.log(self.lambda_max), num=n_pen - 1))
+            self.penalty[1:] = np.exp(np.linspace(start=np.log(st_pen), stop=np.log(self.lambda_max), num=n_pen - 1))
             self.penalty[n_pen - 1] = self.lambda_max
         else:
             self.n_pen = len(penalty)
@@ -266,7 +266,7 @@ class AdaLasso(SdeLearner):
             self.fit(**kwargs)
 
             # compute final estimate using optimal lambda
-            self.lambda_opt = self.penalty[:-1][val_loss < np.nanmin(val_loss) + np.nanstd(val_loss)][-1]
+            self.lambda_opt = self.penalty[:-1][val_loss < np.nanmin(val_loss) + 0.5*np.nanstd(val_loss)][-1]
             self.lambda_min = self.penalty[np.nanargmin(val_loss)]
             self.est = dict(
                 zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))

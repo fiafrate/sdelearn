@@ -434,7 +434,7 @@ class Qmle(SdeLearner):
 
         # required in all cases
 
-        self.As = self.sde.model.der_foo["A"](*self.X[self.batch_id].transpose(), **param).transpose((2, 0, 1)).astype('float32', copy=False)
+        self.As = self.sde.model.der_foo["A"](*self.X[self.batch_id].transpose(), **param).transpose((2, 0, 1))
         self.Ss = np.einsum('ndu, neu -> nde', self.As, self.As)
         #self.Ss = np.swapaxes(self.sde.model.der_foo["S"](*self.X[self.batch_id].transpose(), **param), 0, -1)
         self.Ss_inv = np.zeros_like(self.Ss)
