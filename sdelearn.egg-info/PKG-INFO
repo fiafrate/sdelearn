@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: sdelearn
-Version: 0.1.7
+Version: 0.2.0
 Summary: SDElearn: a Python framework for Stochastic Differential Equations modeling
 Home-page: https://github.com/fiafrate/sdelearn
 Author: Francesco Iafrate
@@ -12,6 +12,11 @@ Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python :: 3
 Description-Content-Type: text/markdown
 License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: sympy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
 
 
 # SDElearn: a Python package for SDE modeling
@@ -168,6 +173,8 @@ accessed by `Sde.model.param`.
 
 * In Qmle.fit if `hess_exact` is set to `False` choose an optimization method which supports Hessian computation (either exact
 or  approximate, see [scipy documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html)). 
+
+
 ## Examples
 
 Fit a multivariate SDE model from simulated data (script [sdelearn-test.py](tests/sdelearn-test.py)).
