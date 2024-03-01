@@ -488,23 +488,23 @@ class Qmle(SdeLearner):
 
         if self.sde.model.npar_di > 0 :
             # split computation, possibly parallel?
-            grad_alpha = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_dr))
-            DAs = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_dr, self.sde.model.n_var, self.sde.model.n_noise))
+            grad_beta = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_di))
+            DAs = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_di, self.sde.model.n_var, self.sde.model.n_noise))
             for i in range(0, len(self.batch_id), 1000):
                 batch_indices = self.batch_id[i:i + 1000]
                 DAs[batch_indices] = np.moveaxis(self.sde.model.der_foo["DA"](*self.X[batch_indices].transpose(), **param), -1, 0)
 
-            CSs = np.einsum('npdu, neu -> npde', DAs, self.As)
-            DSs = CSs + CSs.transpose((0, 1, 3, 2))
+                CSs = np.einsum('npdu, neu -> npde', DAs[batch_indices], self.As[batch_indices])
+                DSs = CSs + CSs.transpose((0, 1, 3, 2))
 
-            GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
-            grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
-            GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
-            grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
-                                             np.einsum('nd, npde -> npe', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :],
+                GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[batch_indices], DSs)
+                grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
+                GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[batch_indices])
+                grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
+                                             np.einsum('nd, npde -> npe', (self.DX[batch_indices] - dn * self.bs[batch_indices])[:, 0, :],
                                                        GB2a),
-                                             (self.DX[self.batch_id] - dn * self.bs)[:, 0, :])
-            grad_beta = grad_beta1 + grad_beta2
+                                             (self.DX[batch_indices] - dn * self.bs[batch_indices])[:, 0, :])
+                grad_beta[batch_indices] = grad_beta1 + grad_beta2
 
         if self.sde.model.npar_dr > 0 and  self.sde.model.npar_di > 0:
             if ret_sample:
