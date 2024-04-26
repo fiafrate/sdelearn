@@ -9,7 +9,7 @@ README = (HERE / "README.md").read_text()
 
 setup(
     name='sdelearn',
-    version='0.2.0',
+    version='0.2.1',
     packages=['sdelearn'],
     url='https://github.com/fiafrate/sdelearn',
     license='MIT',

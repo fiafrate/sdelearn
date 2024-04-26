@@ -91,9 +91,9 @@ class SdeModel:
 
             # create auxiliary functions for evaluating drift and diff expressions
 
-            # b and A take in input arrays
-            self.b = sym.lambdify(self.state_var + self.param, sym.Array(self.b_expr))
-            self.A = sym.lambdify(self.state_var + self.param, sym.Matrix(self.A_expr))
+            # b and A take in input arraysf
+            self.b = sym.lambdify(self.state_var + self.param, sym.Array(self.b_expr), 'numpy')
+            self.A = sym.lambdify(self.state_var + self.param, sym.Matrix(self.A_expr), 'numpy')
 
             def drift_wrap(x, param):
                 return np.array(self.b(*x, **param))
@@ -150,10 +150,10 @@ class SdeModel:
     def set_der(self):
         if len(self.drift_par) > 0:
 
-            # Jb_expr = np.array(
-            #     [[expr.diff(param) + self.null_expr
-            #       for param in self.drift_par] for expr in self.b_expr])
-            Jb_expr = derive_by_array(self.b_expr, sym.symbols(self.drift_par)).transpose()
+            Jb_expr = np.array(
+                [[expr.diff(param) + self.null_expr
+                  for param in self.drift_par] for expr in self.b_expr])
+            #Jb_expr = derive_by_array(self.b_expr, sym.symbols(self.drift_par)).transpose()
             n0 = np.full(Jb_expr.shape, self.null_expr)
             Jb_expr = Jb_expr + n0
 

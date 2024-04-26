@@ -44,6 +44,7 @@ class AdaElasticNet(SdeLearner):
         self.adaptive = adaptive
 
 
+
         # instantiate base est if not already present
         if isinstance(base_estimator, SdeLearner):
             self.base_est = base_estimator
@@ -260,22 +261,22 @@ class AdaElasticNet(SdeLearner):
             # create auxiliary estimator of same type of base est, on training data
             aux_est = type(self.base_est)(sde_tr)
             aux_est.fit(start=self.ini_est, **self.base_est.optim_info['args'])
-            lasso_tr = AdaElasticNet(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
-                                     penalty=self.penalty)
-            lasso_tr.fit(**kwargs)
+            enet_tr = AdaElasticNet(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
+                                     alpha=self.alpha, penalty=self.penalty)
+            enet_tr.fit(**kwargs)
 
             # create aux est object on validation data and compute loss
             aux_est = type(self.base_est)(sde_val)
-            val_loss = np.full(len(lasso_tr.est_path) - 1, np.nan)
-            for i in range(len(lasso_tr.est_path) - 1):
+            val_loss = np.full(len(enet_tr.est_path) - 1, np.nan)
+            for i in range(len(enet_tr.est_path) - 1):
                 try:
                     if cv_metric == "loss":
-                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
+                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i])))
                     elif cv_metric == "mse":
                         n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
-                        lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
+                        enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))
                         val_loss[i] = \
-                            np.mean((lasso_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
+                            np.nanmean((enet_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
                                                       n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
                 except:
                     pass
@@ -318,21 +319,21 @@ class AdaElasticNet(SdeLearner):
                 # create auxiliary estimator of same type of base est, on training data
                 aux_est = type(self.base_est)(sde_tr)
                 aux_est.fit(start=self.ini_est, **self.base_est.optim_info['args'])
-                lasso_tr = AdaElasticNet(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
-                                         penalty=self.penalty)
-                lasso_tr.fit(**kwargs)
+                enet_tr = AdaElasticNet(sde_tr, base_estimator=aux_est, weights=self.weights, delta=self.delta,
+                                         alpha=self.alpha, penalty=self.penalty)
+                enet_tr.fit(**kwargs)
 
                 # create aux est object on validation data and compute loss
                 aux_est = type(self.base_est)(sde_val)
 
-                for i in range(len(lasso_tr.est_path) - 1):
+                for i in range(len(enet_tr.est_path) - 1):
                     try:
                         if cv_metric == "loss":
-                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i])))
+                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i])))
                         elif cv_metric == "mse":
-                            lasso_tr.est = dict(zip(aux_est.sde.model.param, lasso_tr.est_path[i]))
+                            enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))
                             n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
-                            pred = lasso_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
+                            pred = enet_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
                                                     n_rep=n_rep).to_numpy()
                             val_loss[i, k] = np.mean((pred - sde_val.data.data.to_numpy()) ** 2)
                     except:
@@ -340,13 +341,13 @@ class AdaElasticNet(SdeLearner):
 
             # cv loss
             val_loss[np.isinf(val_loss)] = np.nan
-            cv_loss = np.mean(val_loss, axis=1)
-
+            cv_loss = np.nanmean(val_loss, axis=1)
+            cv_std = np.nanstd(val_loss, axis=1)/np.sqrt(nfolds)
             # compute full path
             self.fit(**kwargs)
 
             # compute final estimate using optimal lambda
-            self.lambda_opt = self.penalty[:-1][cv_loss < np.nanmin(cv_loss) + 0.5*np.nanstd(val_loss)][-1]
+            self.lambda_opt = self.penalty[:-1][cv_loss < np.nanmin(cv_loss) + cv_std][-1]
             self.lambda_min = self.penalty[np.nanargmin(cv_loss)]
             self.est = dict(
                 zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))

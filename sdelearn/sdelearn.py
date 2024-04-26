@@ -55,25 +55,41 @@ class Sde:
 
         return self
 
-    def simulate(self, truep, x0, ret_data=False):
-        # x0 can be None, in that case the value in sampling will be used
+    def simulate(self, param, x0, bounds=None, ret_data=False):
+        """
+
+        :param param: parameter value to be used in the simulation
+        :param x0: starting point, if None the value in sde.sampling will be used
+        :param bounds: bounds for the state space. List of pairs (lower, upper) for every state variable.
+        :param ret_data: boolean, either return the simulated data or set sde.data.
+        :return: simulated data, if ret_data, else self.
+        """
         # optionally returns data, useful in predictions
         # should check that model and sampling is not None
 
         # assign parameter names if missing
         if self.model.param is None:
-            self.model.param = list(truep.keys())
+            self.model.param = list(param.keys())
+
+        if bounds is not None:
+            bounds = bounds.transpose()
+            tol = np.sqrt(self.sampling.delta)
 
         sim = np.empty([self.sampling.n, self.model.n_var])
         if self.sampling.x0 is None:
             self.sampling.x0 = x0
         sim[0] = x0
+
         for i in range(1, np.shape(sim)[0]):
-            cur_drift = np.array(self.model.drift(sim[i - 1], truep))
-            cur_diff = np.array(self.model.diff(sim[i - 1], truep))
+            cur_drift = np.array(self.model.drift(sim[i - 1], param))
+            cur_diff = np.array(self.model.diff(sim[i - 1], param))
 
             sim[i] = sim[i - 1] + cur_drift * self.sampling.delta \
                      + np.dot(cur_diff, np.sqrt(self.sampling.delta) * np.random.normal(size=self.model.n_noise))
+
+            if bounds is not None:
+                sim[i][sim[i] < bounds[0]] = bounds[0][sim[i] < bounds[0]] + 0.1 * (bounds[0][sim[i] < bounds[0]] - sim[i][sim[i] < bounds[0]])
+                sim[i][sim[i] > bounds[1]] = bounds[1][sim[i] > bounds[1]] - 0.1 * (sim[i][sim[i] > bounds[1]] - bounds[1][sim[i] > bounds[1]])
 
         # either directly return data (useful in predictions) or set the current object and return it
         if ret_data:

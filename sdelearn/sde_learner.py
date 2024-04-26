@@ -50,7 +50,7 @@ class SdeLearner:
 
         pass
 
-    def predict(self, sampling=None, x0=None, n_rep=1000, **kwargs):
+    def predict(self, sampling=None, x0=None, n_rep=1000, bounds=None, **kwargs):
         """
         montecarlo estimate of average value
         :param x0: starting point for simulations, if None the first observation of data is used
@@ -69,9 +69,9 @@ class SdeLearner:
             x0 = self.sde.data.data.iloc[0]
 
         new_sde = Sde(model=self.sde.model, sampling=new_samp, data=None)
-        pred_data = new_sde.simulate(self.est, x0, ret_data=True) / n_rep
+        pred_data = new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True) / n_rep
         for i in range(n_rep - 1):
-            pred_data += new_sde.simulate(self.est, x0, ret_data=True) / n_rep
+            pred_data += new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True) / n_rep
 
         new_sde.set_data(pred_data).data.format_data(time_index=new_sde.sampling.grid,
                                                      col_names=new_sde.model.state_var)
