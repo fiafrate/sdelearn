@@ -75,6 +75,8 @@ class Sde:
             bounds = bounds.transpose()
             tol = np.sqrt(self.sampling.delta)
 
+        # fix parameter order to match self params
+        param = {k: param.get(k) for k in self.model.param}
         sim = np.empty([self.sampling.n, self.model.n_var])
         if self.sampling.x0 is None:
             self.sampling.x0 = x0

@@ -52,6 +52,11 @@ and it is not necessary to specify the `par_names` and `mod_shape` arguments. Th
   those supplied as initial values for estimation or simulation (`simulate`). See the examples for details. As a rule of thumb
   the models should be supplied as you'd write them with "pen and paper".
   
+
+  The `options` dictionary allows to specify additional options for compiling the model. It supports the option `hess`, a boolean 
+  flag which allows to specify whether to compute second derivatives of the drift and diffusion function while compiling the model.
+This is required for exact Hessian computation in `Qmle` (see `Qmle.fit`).
+
 * `SdeSampling`: it contains information about the temporal sampling of the data. It is constructed by supplying the
 time of the initial observation `initial` (typically `initial=0`), the last observed time `terminal` and the one between `delta`, the time span between each pair 
   of observations (assumed constant), or `n` the number of points in the grid (including endpoints). If `delta` is given 
@@ -110,15 +115,18 @@ function or "two-step", estimating diffusion parameters first and then
 drift. The `hess_exact` option controls how the Hessian matrix (used to build the Fisher information)
 is computed. It allows to choose 
 whether to use the exact symbolic computation of the Hessian matrix 
-or a (faster, less accurate) approximation deriving from the optimization algorithm, 
-if available (e.g. with `BFGS` and `L-BFGS-B`) otherwise it is ignored.
+or a much faster computation based on the outer product of the gradient at the minimum point. 
+(Both converge to the true information matrix when rescaled, see De Gregorio and Iacus).
+Note that exact Hessian computation is available only if the model has been built with the second derivatives computation.
+See `sde.model` options for details. 
 
-
-### AdaLasso
+### AdaLasso, AdaBridge, AdaElasticNet
 SdeLearner based on Least Square Approximation (LSA) of the loss function.
 It requires a base estimator of class SdeLearner(e.g. Qmle) to obtain 
 an initial estimate and the Fisher information and to build 
 the penalized LSA objective function. 
+AIC computation is used for choosing the best tuning parameter
+or, cv based method of a KL based method. 
 
 
 
@@ -141,18 +149,12 @@ Before any estimation takes place the parameter names should be explicitly set.
 directly use it but instead they should use one of the subclasses implementing 
 specific methods.
 
-* in numerical computation the dictionary of parameters is converted
-to arrays. This arrays must match the order of the parameters in the model.
-which is drift first then diffusion, in lexicographic order.
+* in numerical computations it is important that the dictionary of parameters is ordered.
 Fit and loss functions should automatically match the supplied values
 with the order specified in the model: currently automatic reordering is done for
-arguments `param` of the loss function, `start` and `bounds` in model fitting. Note that bounds
+arguments `param` of the loss function, `start` and `bounds` in model fitting, `param` in simulate. Note that bounds
 do not have names, so they are assumed to have the same order as `start`.
-The ordered list of parameters can be
-accessed by `Sde.model.param`.
-
-* In Qmle.fit if `hess_exact` is set to `False` choose an optimization method which supports Hessian computation (either exact
-or  approximate, see [scipy documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html)). 
+The ordered list of parameters can be accessed by `Sde.model.param`.
 
 
 ## Examples
@@ -300,3 +302,6 @@ In this case the estimate corresponding to optimal lambda is computed:
 
     lasso.est
     lasso.vcov
+
+
+

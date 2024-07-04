@@ -349,6 +349,16 @@ class Qmle(SdeLearner):
                 out = 1e100
 
         if self.sde.model.mode == 'sym':
+
+            # check whether both parameter groups are present, otherwise
+            # # compute reduced loss
+            # if len(self.sde.model.drift_par) == 0:
+            #     return self.loss2(param=param, group='beta', batch_id=batch_id, **kwargs)
+            #
+            # if len(self.sde.model.diff_par) == 0:
+            #     return self.loss2(param=param, group='alpha', batch_id=batch_id, **kwargs)
+
+
             try:
                 self.update_aux(param, batch_id)
             except np.linalg.LinAlgError:

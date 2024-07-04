@@ -212,10 +212,8 @@ class AdaElasticNet(SdeLearner):
 
         return jac_y
 
-    def fit(self, cv=None, nfolds=5, cv_metric="loss", backwards=True, **kwargs):
+    def fit(self, cv=None, nfolds=5, cv_metric="loss", aic_k=1, **kwargs):
         """
-        :param backwards: compute solution path either backwards (starting from the zero solution at lambda_max) or
-            forwards (starting from initial estimate for lambda=0)
         :param cv: controls validation of the lambda parameter in the lasso path. Possible values are:
             - None no validation takes place.
             - cv in (0,1): proportion of obs to be used as validation. E.g. if cv = 0.1 the last 10% of
@@ -227,6 +225,7 @@ class AdaElasticNet(SdeLearner):
         :param nfolds: number of folds for cross validation (considered only if cv = True)
         :param cv_metric: is cv is not None controls the loss metric to evaluate on validation sets, either
             "loss" (e.g. quasi likelihood) or "mse" (prediction mse, based on Monte Carlo predictions as in SdeLearner.predict)
+        :param aic_k: k value to be used in AIC computation, ie -loglik + k * nonzero par
         :param kwargs: additional arguments for controlling optimization. See description of `proximal_gradient`
         :return: self
         """
@@ -243,6 +242,11 @@ class AdaElasticNet(SdeLearner):
                 # store results
                 self.path_info[self.n_pen - 3 - i] = cur_est
                 self.est_path[self.n_pen - 2 - i] = cur_est['x']
+
+            self.val_loss = self.aic(k=aic_k)
+            self.lambda_opt = self.penalty[1:-1][self.val_loss < np.nanmin(self.val_loss) + 0.5 * np.nanstd(self.val_loss)][-1]
+            self.lambda_min = self.penalty[np.nanargmin(self.val_loss) + 1]
+
         elif 0 < cv < 1:
             n = self.sde.data.n_obs
             n_val = int(cv * n)
@@ -267,14 +271,14 @@ class AdaElasticNet(SdeLearner):
 
             # create aux est object on validation data and compute loss
             aux_est = type(self.base_est)(sde_val)
-            val_loss = np.full(len(enet_tr.est_path) - 1, np.nan)
-            for i in range(len(enet_tr.est_path) - 1):
+            val_loss = np.full(len(enet_tr.est_path) - 2, np.nan)
+            for i in range(len(enet_tr.est_path) - 2):
                 try:
                     if cv_metric == "loss":
-                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))) + 2/self.sde.data.n_obs * np.sum(enet_tr.est_path[i] != 0)
+                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i+1]))) #+ np.sum(enet_tr.est_path[i+1] != 0)/sde_val.data.n_obs
                     elif cv_metric == "mse":
                         n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
-                        enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))
+                        enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i+1]))
                         val_loss[i] = \
                             np.nanmean((enet_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
                                                       n_rep=n_rep).to_numpy() - sde_val.data.data.to_numpy()) ** 2)
@@ -287,11 +291,8 @@ class AdaElasticNet(SdeLearner):
             self.fit(**kwargs)
 
             # compute final estimate using optimal lambda
-            self.lambda_opt = self.penalty[:-1][val_loss < np.nanmin(val_loss) + np.nanstd(val_loss)][-1]
-            self.lambda_min = self.penalty[np.nanargmin(val_loss)]
-            self.est = dict(
-                zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
-            self.vcov = np.linalg.inv(self.ini_hess)
+            self.lambda_opt = self.penalty[1:-1][val_loss < np.nanmin(val_loss) + np.nanstd(val_loss)][-1]
+            self.lambda_min = self.penalty[np.nanargmin(val_loss)+1]
             self.val_loss = val_loss
 
         elif cv == True:
@@ -303,7 +304,7 @@ class AdaElasticNet(SdeLearner):
             sde_tr = copy.deepcopy(self.sde)
             sde_val = copy.deepcopy(self.sde)
             # array to store loss values
-            val_loss = np.full((self.n_pen - 1, nfolds), np.nan)
+            val_loss = np.full((self.n_pen - 2, nfolds), np.nan)
             for k in range(nfolds):
                 # create auxiliary sde objects
                 sde_tr.sampling = self.sde.sampling.sub_sampling(from_range=[0, ntr0 + k * nkth])
@@ -326,12 +327,12 @@ class AdaElasticNet(SdeLearner):
                 # create aux est object on validation data and compute loss
                 aux_est = type(self.base_est)(sde_val)
 
-                for i in range(len(enet_tr.est_path) - 1):
+                for i in range(len(enet_tr.est_path) - 2):
                     try:
                         if cv_metric == "loss":
-                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))) + 2/self.sde.data.n_obs * np.sum(enet_tr.est_path[i] != 0)
+                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i+1]))) #+ np.sum(enet_tr.est_path[i+1] != 0)/sde_val.data.n_obs
                         elif cv_metric == "mse":
-                            enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))
+                            enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i+1]))
                             n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                             pred = enet_tr.predict(sampling=sde_val.sampling, x0=sde_val.data.data.iloc[0].to_numpy(),
                                                     n_rep=n_rep).to_numpy()
@@ -347,13 +348,12 @@ class AdaElasticNet(SdeLearner):
             self.fit(**kwargs)
 
             # compute final estimate using optimal lambda
-            self.lambda_opt = self.penalty[:-1][cv_loss < np.nanmin(cv_loss) + cv_std][-1]
+            self.lambda_opt = self.penalty[1:-1][cv_loss < np.nanmin(cv_loss) + cv_std][-1]
             self.lambda_min = self.penalty[np.nanargmin(cv_loss)]
-            self.est = dict(
-                zip(aux_est.sde.model.param, self.est_path[np.where(self.penalty == self.lambda_opt)[0][0]]))
-            self.vcov = np.linalg.inv(self.ini_hess)
             self.val_loss = val_loss
 
+        self.est = self.coef(self.lambda_min)
+        self.vcov = np.linalg.inv(self.ini_hess)
         return self
 
     def soft_threshold(self, par, penalty, padding=None):
@@ -634,3 +634,9 @@ class AdaElasticNet(SdeLearner):
 
     def coef(self, penalty):
         return dict(zip(self.sde.model.param, self.est_path[np.where(self.penalty == penalty)[0][0]]))
+
+    def aic(self, k=1):
+        nzp = np.sum(self.est_path[1:-1] != 0, axis=1) / self.sde.data.n_obs
+        loss = [self.base_est.loss(self.coef(pen)) for pen in self.penalty[1:-1]]
+        aic = loss + k * nzp
+        return aic

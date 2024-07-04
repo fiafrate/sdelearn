@@ -296,6 +296,8 @@ class AdaBridge(SdeLearner):
 
             # compute full path
             self.fit(**kwargs)
+            # TODO: FIX CROSS VALIDATION results, MAKE AIC
+
 
             # compute final estimate using optimal lambda
             self.lambda_opt = self.penalty[:-1][val_loss < np.nanmin(val_loss) + 0.5*np.nanstd(val_loss)][-1]
