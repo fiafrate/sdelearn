@@ -26,8 +26,8 @@ dimensions of the model of the form [`n_var`, `n_noise`], where the first dimens
 and the second the number of Gaussian noises; a dictionary `par_names` with keys `"drift"` and `"diffusion"` and with values 
 given by character lists containing all the parameter names appearing in the corresponding drift and diffusion function, 
 e.g. `par_names = {"drift": ["par_dr1, "par_dr2"...], "diffusion: ["par_di1, "par_dr2"...] "`(this argument is optional 
-and parameter names can be set later using the function `set_param`); a character list `var_names` containing variable names, 
-if missing automatically set to `x0`, `x1` ... `x[n_var]`. 
+and parameter names can be set later using the function `set_param`); a character list `state_var` containing variable names.
+Variable names must be supplied in the same order as they appear in the SDE system. If missing, they are assumed to be of the form `x0`, `x1` ... `x[n_var]`. 
 
   The `mode` argument controls the way the model is specified. There are two ways to supply the drift and diffusion components of the model: "symbolic" or "functional" mode. 
 

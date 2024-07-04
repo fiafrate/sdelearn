@@ -91,7 +91,7 @@ class SdeModel:
 
             # create auxiliary functions for evaluating drift and diff expressions
 
-            # b and A take in input arraysf
+            # b and A take arrays as input
             self.b = sym.lambdify(self.state_var + self.param, sym.Array(self.b_expr), 'numpy')
             self.A = sym.lambdify(self.state_var + self.param, sym.Matrix(self.A_expr), 'numpy')
 

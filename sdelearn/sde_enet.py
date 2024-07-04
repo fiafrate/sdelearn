@@ -75,9 +75,9 @@ class AdaElasticNet(SdeLearner):
                 # fix hessian matrix if not symmetric positive definite
                 v, a = sp.linalg.eigh(self.ini_hess)
                 # set to zero negative eigs + some small noise (closest SPD approx)
-                v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
+                # v[v < 0] = 0.001 * np.abs(np.random.randn(len(v[v < 0])))
                 # replace neg eigvals  with positive vales
-                # v[v < 0] = np.abs(v[v < 0])
+                v[v < 0] = np.abs(v[v < 0])
                 self.ini_hess = a @ np.diag(v) @ a.transpose()
                 # lipschitz constant of quadratic part
                 self.lip = np.max(v)
@@ -271,7 +271,7 @@ class AdaElasticNet(SdeLearner):
             for i in range(len(enet_tr.est_path) - 1):
                 try:
                     if cv_metric == "loss":
-                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i])))
+                        val_loss[i] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))) + 2/self.sde.data.n_obs * np.sum(enet_tr.est_path[i] != 0)
                     elif cv_metric == "mse":
                         n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
                         enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))
@@ -329,7 +329,7 @@ class AdaElasticNet(SdeLearner):
                 for i in range(len(enet_tr.est_path) - 1):
                     try:
                         if cv_metric == "loss":
-                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i])))
+                            val_loss[i, k] = aux_est.loss(dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))) + 2/self.sde.data.n_obs * np.sum(enet_tr.est_path[i] != 0)
                         elif cv_metric == "mse":
                             enet_tr.est = dict(zip(aux_est.sde.model.param, enet_tr.est_path[i]))
                             n_rep = kwargs.get('n_rep') if kwargs.get('n_rep') is not None else 100
@@ -403,7 +403,7 @@ class AdaElasticNet(SdeLearner):
 
         return s
 
-    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
+    def     proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
                           opt_alg="fista",
                           backtracking=False,
                           s_ini = 10,
