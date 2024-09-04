@@ -162,10 +162,10 @@ class SdeModel:
                     [[[expr.diff(param1, param2) + self.null_expr
                        for param1 in self.drift_par] for param2 in self.drift_par] for expr in self.b_expr])
             else:
-                Hb_expr = [[[0]]]
+                Hb_expr = np.array([[[0]]])
         else:
-            Jb_expr = [[0]]
-            Hb_expr = [[[0]]]
+            Jb_expr = np.array([[0]])
+            Hb_expr = np.array([[[0]]])
 
         if len(self.diff_par) > 0:
             # DS_expr = np.array([[[expr.diff(param) + self.null_expr
@@ -179,15 +179,15 @@ class SdeModel:
                 n0 = np.full(HA_expr.shape, self.null_expr)
                 HA_expr = HA_expr + n0
             else:
-                HA_expr = [[[[0]]]]
+                HA_expr = np.array([[[[0]]]])
                 # HS_expr = np.array(
             #     [[[[expr.diff(param1, param2) + self.null_expr
             #         for expr in row] for row in self.S_expr] for param2 in self.diff_par] for param1 in self.diff_par])
         else:
             # DS_expr = [[[0]]]
             # HS_expr = [[[[0]]]]
-            DA_expr = [[[0]]]
-            HA_expr = [[[[0]]]]
+            DA_expr = np.array([[[0]]])
+            HA_expr = np.array([[[[0]]]])
         #
         # C_expr = np.matmul(DA_expr, self.A_expr.T)
         # DS_expr = C_expr + C_expr.transpose((0, 2, 1))
@@ -198,8 +198,10 @@ class SdeModel:
 
         # der_expr = {"b": sym.Matrix(self.b_expr), "Jb": sym.Array(Jb_expr), "Hb": sym.Array(Hb_expr),
         #             "S": sym.Matrix(self.S_expr), "DS": sym.Array(DS_expr), "HS": sym.Array(HS_expr)}
-        der_expr = {"b": sym.Matrix(self.b_expr), "Jb": sym.Array(Jb_expr), "Hb": sym.Array(Hb_expr),
-                    "A": sym.Matrix(self.A_expr), "DA": sym.Array(DA_expr), "HA": sym.Array(HA_expr)}
+
+        # currently passing tensors as lists in order to avoid errors since sympy 1.13
+        der_expr = {"b": sym.Matrix(self.b_expr), "Jb": Jb_expr.tolist(), "Hb": Hb_expr.tolist(),
+                    "A": sym.Matrix(self.A_expr), "DA": DA_expr.tolist(), "HA": HA_expr.tolist()}
         return der_expr
 
     def __str__(self):

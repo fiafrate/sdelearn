@@ -244,7 +244,10 @@ class AdaElasticNet(SdeLearner):
                 self.est_path[self.n_pen - 2 - i] = cur_est['x']
 
             self.val_loss = self.aic(k=aic_k)
-            self.lambda_opt = self.penalty[1:-1][self.val_loss < np.nanmin(self.val_loss) + 0.5 * np.nanstd(self.val_loss)][-1]
+
+            # compute lamba_opt using iqr instead std
+            iqr = np.quantile(self.val_loss, 0.5, method='midpoint') - np.quantile(self.val_loss, 0.0, method='midpoint')
+            self.lambda_opt = self.penalty[1:-1][self.val_loss < np.nanmin(self.val_loss) + iqr][-1]
             self.lambda_min = self.penalty[np.nanargmin(self.val_loss) + 1]
 
         elif 0 < cv < 1:
