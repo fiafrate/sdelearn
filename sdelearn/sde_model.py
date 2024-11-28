@@ -69,7 +69,14 @@ class SdeModel:
         # lambdify the expressions and then set drift and diffusion
 
         if mode == 'sym':
+
+            # make var and par maps. These dicts tell, for each dimension, what variables and what parameters
+            # appear in that equation, respectively. We make such maps for drift and diffusion.
+            # We use this, for example, to tell if a model can be estimated diagonally (one var at a time) or not.
+
+
             self.null_expr = sym.Mul(sym.symbols(self.state_var[0]), 0, evaluate=False)
+            #self.null_expr = sym.Mul(sym.symbols(self.state_var[0]), 0)
 
             # convert list expressions into numpy arrays
             self.b_expr = np.array([v + self.null_expr for v in drift])
@@ -88,6 +95,25 @@ class SdeModel:
 
             self.set_param(par_names)
 
+            self.var_map_diff = {}
+            self.par_map_diff = {}
+
+            self.var_map_drift = {}
+            self.par_map_drift = {}
+
+            for i in range(self.n_var):
+                # drift maps
+                s_i = set([s.name for s in sym.simplify(self.b_expr[i]).free_symbols])
+                v_i = set([s for s in s_i if s in self.state_var])
+                p_i = s_i - v_i
+                self.var_map_drift[self.state_var[i]] = v_i
+                self.par_map_drift[self.state_var[i]] = p_i
+                # diff maps
+                s_i = set([s.name for expr in sym.simplify(self.A_expr[i]) for s in expr.free_symbols])
+                v_i = set([s for s in s_i if s in self.state_var])
+                p_i = s_i - v_i
+                self.var_map_diff[self.state_var[i]] = v_i
+                self.par_map_diff[self.state_var[i]] = p_i
 
             # create auxiliary functions for evaluating drift and diff expressions
 

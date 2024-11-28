@@ -11,6 +11,8 @@ from .sde_learner import SdeLearner
 
 import warnings
 import scipy as sp
+from collections import defaultdict
+
 
 class Qmle(SdeLearner):
     def __init__(self, sde):
@@ -128,13 +130,19 @@ class Qmle(SdeLearner):
                         x_start = np.array([start.get(k) for k in self.sde.model.diff_par])
                         group_ini = np.array([start.get(k) for k in self.sde.model.drift_par])
 
-                        diag_est = self.sde.model.n_var > 1 and np.array_equal(sym.simplify(self.sde.model.A_expr), np.diag(np.diag(sym.simplify(self.sde.model.A_expr))))
-                        if diag_est:
+                        diag_diff = self.check_diag_est() and self.sde.model.n_var > 1
+                        if diag_diff:
                             # if diagonal matrix perform univariate estimation
+                            # NB THIS CURRENTLY WORKS ONLY WHEN DIAGONAL TERMS DEPEND ON 1 VARIABLE ONLY AND THERE ARE NO SHARED PARAMETERS
                             beta_est = np.empty(self.sde.model.npar_di)
                             it_ = 0
                             for i in range(self.sde.model.n_var):
-                                mod_i = SdeModel([0], [[sym.simplify(self.sde.model.A_expr[i,i])]], state_var=[self.sde.model.state_var[i]])
+                                diff_i = [[sym.simplify(self.sde.model.A_expr[i,i])]]
+                                sym_i = set([s.name for s in diff_i[0][0].free_symbols])
+                                # for future use, when exogenous variables are added
+                                #id_var_i = [j for j in range(self.sde.model.n_var) if self.sde.model.state_var[j] in sym_i and j is not i]
+                                state_var_i =[self.sde.model.state_var[i]]
+                                mod_i = SdeModel(drift=[0], diff=diff_i, state_var=state_var_i)
 
                                 # perform estimation only if there are some parameters to estimate
                                 if len(mod_i.param) > 0:
@@ -233,7 +241,7 @@ class Qmle(SdeLearner):
                             h_alpha = np.tensordot(gs_alpha, gs_alpha, (0, 0)) * (self.sde.data.n_obs - 1)
                         # diffusion case: separate case for diagonal estimation
                         if self.sde.model.npar_di > 0:
-                            if diag_est:
+                            if diag_diff:
                                 h_beta = sp.linalg.block_diag(*[v['hess'] for k, v in res_beta.info.items()])
                                 # stop here
                             else:
@@ -645,8 +653,6 @@ class Qmle(SdeLearner):
 
 
 
-
-
     # compute the hessian of the quasi-lik at point par for a given sde object
     def hessian(self, param, batch_id=None, **kwargs):
 
@@ -719,6 +725,27 @@ class Qmle(SdeLearner):
 
         return hess
 
+
+    def check_diag_est(self):
+
+        S_sim = np.array(sym.simplify(self.sde.model.S_expr))
+        is_diagonal = np.all(S_sim == np.diag(np.diagonal(S_sim)))
+        if is_diagonal:
+            from collections import defaultdict
+            # d maps every parameter to the equations it appears in
+            d = defaultdict(list)
+            tuples = [(vi, k) for k, v in self.sde.model.par_map_diff.items() for vi in v]
+            for k, v in tuples:
+                d[k].append(v)
+
+            one_var_eq = np.all([v == set([k]) or v == set() for k, v in self.sde.model.var_map_diff.items()])
+            one_par_eq = np.all([len(v) == 1 for k, v in d.items()])
+
+            return one_var_eq and one_par_eq
+        else:
+            return False
+
+
     @staticmethod
     def loss_wrap2(par, sde_learn, group, group_ini, **kwargs):
         """
@@ -748,3 +775,4 @@ class Qmle(SdeLearner):
             par = np.concatenate((group_ini, par))
         param = dict(zip(sde_learn.sde.model.param, par))
         return sde_learn.gradient2(param=param, group=group, **kwargs)
+

@@ -50,9 +50,12 @@ class SdeLearner:
 
         pass
 
-    def predict(self, sampling=None, x0=None, n_rep=1000, bounds=None, **kwargs):
+    def predict(self, sampling=None, x0=None, n_rep=1000, bounds=None, ret_data=False, **kwargs):
         """
-        montecarlo estimate of average value
+        montecarlo estimate of mean value
+        :param ret_data: if True returns the actual simulated samples, in a (n_rep, n_obs, dim) array.
+               Otherwise returns a dataframe indexed by time containing the MC average of predictions
+        :param bounds: force bounds in simulation (e.g. get non negative values)
         :param x0: starting point for simulations, if None the first observation of data is used
         :param n_rep: number of simulations for estimating expected value
         :param sampling: SdeSampling object specifying where predictions take place. If None same as learner's sde is used
@@ -69,14 +72,20 @@ class SdeLearner:
             x0 = self.sde.data.data.iloc[0]
 
         new_sde = Sde(model=self.sde.model, sampling=new_samp, data=None)
-        pred_data = new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True) / n_rep
-        for i in range(n_rep - 1):
-            pred_data += new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True) / n_rep
+        if ret_data == False:
+            pred_data = new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True) / n_rep
+            for i in range(n_rep - 1):
+                pred_data += new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True) / n_rep
 
-        new_sde.set_data(pred_data).data.format_data(time_index=new_sde.sampling.grid,
-                                                     col_names=new_sde.model.state_var)
+            new_sde.set_data(pred_data).data.format_data(time_index=new_sde.sampling.grid,
+                                                         col_names=new_sde.model.state_var)
 
-        return new_sde.data.data
+            return new_sde.data.data
+        else:
+            pred_data = np.empty((n_rep, new_samp.n, new_sde.model.n_var))
+            for i in range(n_rep):
+                pred_data[i] = new_sde.simulate(self.est, x0, bounds=bounds, ret_data=True)
+            return pred_data
 
     def loss(self, param):
         """

@@ -393,7 +393,7 @@ class AdaLasso(SdeLearner):
         :param max_it: maximum number of iterations allowed
         :param bounds: matrix-like, parameter bounds with rows [par_min, par_max]
         :param opt_alg: choose optimization algorithm: either "fista", "cyclic" (coordinate-wise with custom order) or "block_wise"
-            if sde model has block paramters
+            if sde model has block parameters
         :param backtracking: boolean, if true use backtracking to determine stepsize, otherwise use relevant lip constant
         :param s_ini: initial stepsize value
         :param kwargs
