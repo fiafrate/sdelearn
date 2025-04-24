@@ -53,8 +53,8 @@ and it is not necessary to specify the `par_names` and `mod_shape` arguments. Th
   the models should be supplied as you'd write them with "pen and paper".
   
 
-  The `options` dictionary allows to specify additional options for compiling the model. It supports the option `hess`, a boolean 
-  flag which allows to specify whether to compute second derivatives of the drift and diffusion function while compiling the model.
+  The `options` dictionary allows specifying additional options for compiling the model. It supports the option `hess`, a boolean 
+  flag which allows specifying whether to compute second derivatives of the drift and diffusion function while compiling the model.
 This is required for exact Hessian computation in `Qmle` (see `Qmle.fit`).
 
 * `SdeSampling`: it contains information about the temporal sampling of the data. It is constructed by supplying the
@@ -95,7 +95,7 @@ Every Learner has the following fields:
 
 
 
-_Currently available learners are Qmle and AdaLasso._
+_Currently available learners are Qmle for a quasi-likelihood-based estimator, AdaLasso, AdaBridge, AdaEnet classes for regularized estimation._
 
 ### Qmle
 SdeLearner based on quasi maximum-likelihood estimation.
@@ -117,12 +117,24 @@ is computed. It allows to choose
 whether to use the exact symbolic computation of the Hessian matrix 
 or a much faster computation based on the outer product of the gradient at the minimum point. 
 (Both converge to the true information matrix when rescaled, see De Gregorio and Iacus).
-Note that exact Hessian computation is available only if the model has been built with the second derivatives computation.
+Note that exact Hessian computation is available only if the model has been built with the second derivatives' computation.
+
+If a two-step (adaptive) estimation procedure is 
+used, then the `loss2` and `gradient2` functions can be used to get the loss and the gradient, respectively, for drift and diffusion parameters only.
+The loss functions are as in Uchida, Yoshida (2012). 
+The parameter group can be specified via the `group` parameter, which can take values `alpha` for drift or `beta` for diffusion parameters. 
+
+
+
+The loss and the gradient are by default scaled by the number of observation. The gradient can optionally be scaled by its asymptotic rates
+(see e.g. Kessler 1997) by specifying `asy_scale=True`. This is used in the OPG approximation of the Hessian, in order to obtain entries 
+that have a consisten scale.
+
 See `sde.model` options for details. 
 
 ### AdaLasso, AdaBridge, AdaElasticNet
 SdeLearner based on Least Square Approximation (LSA) of the loss function.
-It requires a base estimator of class SdeLearner(e.g. Qmle) to obtain 
+It requires a base estimator of class SdeLearner(e.g. Qmle) to get 
 an initial estimate and the Fisher information and to build 
 the penalized LSA objective function. 
 AIC computation is used for choosing the best tuning parameter
@@ -145,17 +157,28 @@ or an estimation method is called the user will have to supply a `truep` paramet
 the optimization which will act as a _template_ for the parameter space of the model.
 Before any estimation takes place the parameter names should be explicitly set.
 
-* the `SdeLearner` class is generic ("abstract") and the user should never
-directly use it but instead they should use one of the subclasses implementing 
+
+* The `SdeLearner` class is generic ("abstract") and the user should never
+directly use it, but instead they should use one of the subclasses implementing 
 specific methods.
 
-* in numerical computations it is important that the dictionary of parameters is ordered.
+* In numerical computations, it is important that the dictionary of parameters is ordered.
 Fit and loss functions should automatically match the supplied values
 with the order specified in the model: currently automatic reordering is done for
 arguments `param` of the loss function, `start` and `bounds` in model fitting, `param` in simulate. Note that bounds
 do not have names, so they are assumed to have the same order as `start`.
 The ordered list of parameters can be accessed by `Sde.model.param`.
 
+* In the `gradient2(param, group='beta')` case, a full parameter vector has to be supplied, even if the drift components 
+ actually are not used in the computation.
+
+* in symbolic mode, the model computes parameter and variable maps, to keep track of which parameters and variables
+appear in each equation, for both drift and diffusion components. These are called `par_map_drift`, `var_map_diff`, etc.
+
+* In the case of the `two_step` quasi-likelihood estimation, if the estimation problem for the diffusion can be diagonalized 
+(i.e. the diffusion matrix is diagonal, each parameter appears only in one equation, and depends only on one variable), 
+a significant speedup is achieved by fitting one equation at a time. This is automatically checked by the `check_diag_est` 
+method when `fit` is called. This uses the maps defined above. 
 
 ## Examples
 

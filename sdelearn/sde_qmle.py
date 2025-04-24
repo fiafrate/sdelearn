@@ -90,7 +90,6 @@ class Qmle(SdeLearner):
 
             self.optim_info['res'] = res
 
-            return self
 
         if self.sde.model.mode == 'sym':
             if method == 'AGD':
@@ -106,7 +105,6 @@ class Qmle(SdeLearner):
                 self.est = dict(zip(self.sde.model.param, res['x']))
                 self.vcov = np.linalg.inv(self.optim_info['hess']) / (self.sde.data.n_obs - 1)
 
-                return self
 
             if method != 'AGD':
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -205,7 +203,6 @@ class Qmle(SdeLearner):
                     if hess_exact:
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
-                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
                     # elif (hasattr(res_alpha, 'hess_inv') or hasattr(res_beta, 'hess_inv')):
                     #     #extract block cov matrix from bfgs or similar if both par blocks are available
                     #     if len(self.sde.model.drift_par) * len(self.sde.model.diff_par) > 0:
@@ -237,16 +234,16 @@ class Qmle(SdeLearner):
                     else:
                         # drift hessian computation
                         if self.sde.model.npar_dr > 0:
-                            gs_alpha = self.gradient2(self.est, group='alpha', ret_sample=True)
-                            h_alpha = np.tensordot(gs_alpha, gs_alpha, (0, 0)) * (self.sde.data.n_obs - 1)
+                            gs_alpha = self.gradient2(self.est, group='alpha', ret_sample=True, asy_scale=True)
+                            h_alpha = np.tensordot(gs_alpha, gs_alpha, (0, 0))
                         # diffusion case: separate case for diagonal estimation
                         if self.sde.model.npar_di > 0:
                             if diag_diff:
                                 h_beta = sp.linalg.block_diag(*[v['hess'] for k, v in res_beta.info.items()])
                                 # stop here
                             else:
-                                gs_beta = self.gradient2(self.est, group='beta', ret_sample=True)
-                                h_beta = np.tensordot(gs_beta, gs_beta, (0, 0)) * (self.sde.data.n_obs - 1)
+                                gs_beta = self.gradient2(self.est, group='beta', ret_sample=True, asy_scale=True)
+                                h_beta = np.tensordot(gs_beta, gs_beta, (0, 0))
 
                         #
                         # store results according to groups present
@@ -257,16 +254,11 @@ class Qmle(SdeLearner):
                             self.optim_info["hess"] = h_alpha
                         else:
                             self.optim_info["hess"] = h_beta
-                        try:
-                            self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
-                        except np.linalg.LinAlgError:
-                            warnings.warn(
-                                'Singular Hessian matrix occurred during optimization. Try a different starting point.\n')
 
 
 
 
-                        #end two step estimation
+                        #end two-step estimation
 
                 else:
                     # begin simultaneous estimation
@@ -278,7 +270,6 @@ class Qmle(SdeLearner):
                     if hess_exact:
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
                         self.optim_info["hess"] = self.hessian(self.est)
-                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
                     # else:
                     #     if isinstance(res.hess_inv, np.ndarray):
                     #         self.vcov = res.hess_inv / (self.sde.data.n_obs - 1)
@@ -286,9 +277,9 @@ class Qmle(SdeLearner):
                     #         self.vcov = res.hess_inv.todense() / (self.sde.data.n_obs - 1)
                     #     self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
                     else:
-                        gs = self.gradient(self.est, ret_sample=True)
-                        self.optim_info["hess"] = np.tensordot(gs, gs, (0,0)) * (self.sde.data.n_obs - 1)
-                        self.vcov = np.linalg.inv(self.optim_info["hess"]) / (self.sde.data.n_obs - 1)
+                        gs = self.gradient(self.est, ret_sample=True, asy_scale=True)
+                        self.optim_info["hess"] = np.tensordot(gs, gs, (0,0))
+
 
                     self.optim_info['res'] = res
                     if self.faulty_par:
@@ -296,8 +287,41 @@ class Qmle(SdeLearner):
 
                     # end simultaneous estimation
 
-                return self
+        # try inverting hessian
+        try:
+            self.vcov = np.linalg.inv(self.optim_info["hess"])
+        except np.linalg.LinAlgError:
+            warnings.warn(
+                'Singular Hessian matrix occurred during optimization. Try a different starting point.\n')
 
+        rates = self.rates()
+
+        self.vcov = rates @ self.vcov @ rates
+
+        return self
+
+    def rates(self, group='all'):
+        '''
+        computes rate matrix, of the type diag(1/sqrt(n delta_n) , 1/sqrt(n))
+        :param group: either all, alpha (drift) or beta (diff)
+        :return: rates matrix
+        '''
+        n = self.sde.data.n_obs - 1
+        dn = self.sde.sampling.delta
+        dr_block_rate = np.eye(self.sde.model.npar_dr) / np.sqrt(n * dn)
+        di_block_rate = np.eye(self.sde.model.npar_di) / np.sqrt(n)
+        if group == 'all':
+            if self.sde.model.npar_dr > 0 and self.sde.model.npar_di > 0:
+                rates = sp.linalg.block_diag(dr_block_rate, di_block_rate)
+            elif self.sde.model.npar_dr > 0:
+                rates = dr_block_rate
+            else:
+                rates = di_block_rate
+        elif group == 'alpha':
+            rates = dr_block_rate
+        elif group == 'beta':
+            rates = di_block_rate
+        return rates
 
     # @staticmethod
     # def qmle(sde, start, upper=None, lower=None):
@@ -500,13 +524,14 @@ class Qmle(SdeLearner):
 
     # compute the gradient of the quasi-lik at point par for a given sde object
 
-    def gradient(self, param, batch_id=None, ret_sample=False):
+    def gradient(self, param, batch_id=None, ret_sample=False, asy_scale=False):
         '''
         compute the gradient of the negative quasi-lik at point par for a given sde object
         :param param: dict of parameter values at which evaluate the gradient
         :param batch_id: indices of subset of observation to be used, if None, default, uses all
         :param ret_sample: if True returns the vector of gradient evaluation at each data point, without summing. Defaults to False
-        :return: array of gradient with same size as param. If ret_vec, an array with shape (n_obs, n_param) is returned
+        :param asy_scale: use asymptotic rates in scaling, i.e. (1/sqrt(n delta_n), 1/sqrt(n)). If False (default) scale by n_obs, same as the loss
+        :return: gradient array with the same size as param. If ret_vec, an array with shape (n_obs, n_param) is returned
         '''
         assert self.sde.model.mode == 'sym', 'Gradient computation available only in symbolic mode'
 
@@ -530,6 +555,10 @@ class Qmle(SdeLearner):
                 batch_indices = self.batch_id[i:i + 1000]
                 Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[batch_indices].transpose(), **param), -1, 0)
                 grad_alpha[batch_indices] = -2 * np.matmul(self.DXS_inv[batch_indices], Jbs)[:, 0, :]
+            if asy_scale:
+                grad_alpha /= np.sqrt(len(self.batch_id) * self.sde.sampling.delta)
+            else:
+                grad_alpha /= len(self.batch_id)
 
         if self.sde.model.npar_di > 0 :
             # split computation, possibly parallel?
@@ -550,35 +579,40 @@ class Qmle(SdeLearner):
                                                        GB2a),
                                              (self.DX[batch_indices] - dn * self.bs[batch_indices])[:, 0, :])
                 grad_beta[batch_indices] = grad_beta1 + grad_beta2
+            if asy_scale:
+                grad_beta /= np.sqrt(len(self.batch_id))
+            else:
+                grad_beta /= len(self.batch_id)
 
         if self.sde.model.npar_dr > 0 and  self.sde.model.npar_di > 0:
             if ret_sample:
-                return 0.5 * np.concatenate([grad_alpha, grad_beta], axis=1) * 1 / len(self.batch_id)
+                out = 0.5 * np.concatenate([grad_alpha, grad_beta], axis=1)
             else:
-                return 0.5 * np.concatenate([np.sum(grad_alpha, axis=0), np.sum(grad_beta, axis=0)]) * 1 / len(self.batch_id)
+                out = 0.5 * np.concatenate([np.sum(grad_alpha, axis=0), np.sum(grad_beta, axis=0)])
         elif self.sde.model.npar_dr > 0:
             if ret_sample:
-                return 0.5 * grad_alpha * 1 / len(self.batch_id)
+                out = 0.5 * grad_alpha
             else:
-                return 0.5 * np.sum(grad_alpha, axis=0) * 1 / len(self.batch_id)
+                out = 0.5 * np.sum(grad_alpha, axis=0)
         else:
             if ret_sample:
-                return 0.5 * grad_beta * 1 / len(self.batch_id)
+                out = 0.5 * grad_beta
             else:
-                return 0.5 * np.sum(grad_beta, axis=0) * 1 / len(self.batch_id)
+                out= 0.5 * np.sum(grad_beta, axis=0)
+
+
+        return out
 
 
 
 
 
-
-
-    def gradient2(self, param, group, batch_id=None, ret_sample=False):
+    def gradient2(self, param, group, batch_id=None, ret_sample=False, asy_scale=False):
         """
-
         :param param: param dict a which to evaluate the gradient
         :param group: gradient for drift or diffusion part separately
         :param batch_id: internally used for stochastic GD
+        :param asy_scale: use asymptotic rates in scaling, i.e. (1/sqrt(n delta_n), 1/sqrt(n)). If False (default) scale by n_obs, same as the loss
         :return: gradient with respect to drift or diffusion parameter separately
         """
 
@@ -598,12 +632,15 @@ class Qmle(SdeLearner):
                 batch_indices = self.batch_id[i:i + 1000]
                 Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[batch_indices].transpose(), **param), -1, 0)
                 grad_alpha[batch_indices] = -2 * np.matmul(self.DXS_inv[batch_indices], Jbs)[:, 0, :]
-
+            if asy_scale:
+                grad_alpha /= np.sqrt(len(self.batch_id) * self.sde.sampling.delta)
+            else:
+                grad_alpha /= len(self.batch_id)
 
             if ret_sample:
-                return 0.5 * grad_alpha * 1 / (self.sde.data.n_obs - 1)
+                return 0.5 * grad_alpha
             else:
-                return 0.5 * np.sum(grad_alpha, axis=0) * 1 / (self.sde.data.n_obs - 1)
+                return 0.5 * np.sum(grad_alpha, axis=0)
 
 
         if group == "beta":
@@ -627,12 +664,17 @@ class Qmle(SdeLearner):
                                                  np.einsum('nd, npde -> npe', (self.DX[batch_indices])[:, 0, :], GB2a),
                                                  (self.DX[batch_indices])[:, 0, :])
                 grad_beta[batch_indices] = grad_beta1 + grad_beta2
+            if asy_scale:
+                grad_beta /= np.sqrt(len(self.batch_id))
+            else:
+                grad_beta /= len(self.batch_id)
 
             if ret_sample:
-                return 0.5 * grad_beta * 1 / (self.sde.data.n_obs - 1)
+                return 0.5 * grad_beta
             else:
-                return 0.5 * np.sum(grad_beta, axis=0) * 1 / (self.sde.data.n_obs - 1)
+                return 0.5 * np.sum(grad_beta, axis=0)
 
+        return None
 
     def gbeta(self, param):
         dn = self.sde.sampling.delta
