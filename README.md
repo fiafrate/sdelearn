@@ -118,6 +118,7 @@ whether to use the exact symbolic computation of the Hessian matrix
 or a much faster computation based on the outer product of the gradient at the minimum point. 
 (Both converge to the true information matrix when rescaled, see De Gregorio and Iacus).
 Note that exact Hessian computation is available only if the model has been built with the second derivatives' computation.
+_The recommended setting is to use `two_step=True` and `hess_exact=False` for numerical stability_
 
 If a two-step (adaptive) estimation procedure is 
 used, then the `loss2` and `gradient2` functions can be used to get the loss and the gradient, respectively, for drift and diffusion parameters only.
@@ -179,6 +180,13 @@ appear in each equation, for both drift and diffusion components. These are call
 (i.e. the diffusion matrix is diagonal, each parameter appears only in one equation, and depends only on one variable), 
 a significant speedup is achieved by fitting one equation at a time. This is automatically checked by the `check_diag_est` 
 method when `fit` is called. This uses the maps defined above. 
+
+* Qmle has a low-memory mode that splits the gradient computation in batches. 
+This avoids issues memory limit being exceeded for larger models, resulting in 
+the process being killed. To turn this on, use the method `set_low_mem(switch=True)`. 
+The instance of Qmle enters in low memory mode and all the subsequent computations will be split.
+Note that this still returns the exact gradient, i.e. all the batches will be subsequently processed. 
+This saves memory, at the cost of a longer execution time.
 
 ## Examples
 
