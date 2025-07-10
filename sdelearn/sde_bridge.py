@@ -514,17 +514,14 @@ class AdaBridge(SdeLearner):
         x_curr = np.copy(x_prev)
         x_curr[padding == 1] = self.hard_threshold(par=x_prev[padding == 1] - s * jac_y, penalty=penalty * s, padding=padding)
 
-        while np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon and it_count < max_it or not block_end:
+        while (np.linalg.norm(x_curr - x_prev, ord=2) >= epsilon or not block_end) and it_count < max_it :
 
-
-
-            if it_count % 100 == 1:
-                print(str(np.where(self.penalty==penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
-                print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
-                print('stepsize: ' + str(s))
+            # if it_count % 100 == 1:
+            #     print(str(np.where(self.penalty==penalty)) + '/' + str(self.n_pen) + ': ' + str(it_count))
+            #     print('norm: ' + str(np.linalg.norm(x_curr - x_prev, ord=2)))
+            #     print('stepsize: ' + str(s))
             it_count += 1
-
-
+            #print(it_count)
 
             if opt_alg == 'mAPG':
 

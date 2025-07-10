@@ -192,7 +192,11 @@ class Qmle(SdeLearner):
                     # final round of auxiliary quantities updates, in case drift group was missing
                     if len(self.sde.model.drift_par) == 0:
                         self.aux_par = None
-                        self.update_aux(self.est)
+                        try:
+                            self.update_aux(self.est)
+                        except np.linalg.LinAlgError:
+                            pass
+
                     # create result components
                     self.optim_info['res_alpha'] = res_alpha
                     self.optim_info['res_beta'] = res_beta
@@ -447,6 +451,7 @@ class Qmle(SdeLearner):
             else:
                 return
 
+        self.faulty_par = False
         self.aux_par = param
         if batch_id is not None:
             self.batch_id = batch_id
@@ -471,7 +476,6 @@ class Qmle(SdeLearner):
         #     (self.X.shape[0] - 1, 1, self.X.shape[1]))
         self.DXS_inv = np.matmul(self.DX[self.batch_id] - self.sde.sampling.delta * self.bs, self.Ss_inv)
 
-        self.faulty_par = False
         return
 
     def update_aux2(self, param, group, batch_id=None, force_recompute=False):
@@ -493,6 +497,8 @@ class Qmle(SdeLearner):
                 return
 
         self.aux_par = param
+        self.faulty_par = False
+
         if batch_id is not None:
             self.batch_id = batch_id
         else:
@@ -515,11 +521,14 @@ class Qmle(SdeLearner):
         if group == "alpha":
             # required only for drift estimation
             if self.Ss_inv is None:
-                self.update_aux2(param, 'beta', batch_id, True)
+                try:
+                    self.update_aux2(param, 'beta', batch_id, True)
+                except np.linalg.LinAlgError:
+                    pass
+
             self.bs = np.swapaxes(self.sde.model.der_foo["b"](*self.X[self.batch_id].transpose(), **param), 0, -1)
             self.DXS_inv = np.matmul(self.DX[self.batch_id] - self.sde.sampling.delta * self.bs, self.Ss_inv)
 
-        self.faulty_par = False
         return
 
     # compute the gradient of the quasi-lik at point par for a given sde object
