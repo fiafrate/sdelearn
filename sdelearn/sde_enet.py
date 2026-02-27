@@ -406,7 +406,7 @@ class AdaElasticNet(SdeLearner):
 
         return s
 
-    def     proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
+    def proximal_gradient(self, x0, penalty, epsilon=1e-03, max_it=1000, bounds=None,
                           opt_alg="fista",
                           backtracking=False,
                           s_ini = 10,
