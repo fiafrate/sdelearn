@@ -39,6 +39,7 @@ class Qmle(SdeLearner):
         self.DXS_inv = None
         # auxiliary value of param: latest value at which derivatives were updated (avoids repetitions)
         self.aux_par = None
+        self._aux_group = None
         self.faulty_par = False
         self.batch_id = np.arange(self.sde.data.n_obs - 1)
         self.low_mem = False
@@ -93,19 +94,12 @@ class Qmle(SdeLearner):
 
 
         if self.sde.model.mode == 'sym':
+            n = self.sde.data.n_obs - 1
             if method == 'AGD':
                 x0 = np.array(list(start.values()))
                 res = self.nesterov_descent(self.loss_wrap, x0, self.grad_wrap, sde_learn=self, **kwargs)
-                # bounds=kwargs.get('bounds'),
-                # cyclic=False if kwargs.get('cyclic') is None else kwargs.get('cyclic'),
-                # sde_learn=self)
-
                 self.optim_info['res'] = res
-                self.optim_info['hess'] = self.hessian(self.est)
-
                 self.est = dict(zip(self.sde.model.param, res['x']))
-                self.vcov = np.linalg.inv(self.optim_info['hess']) / (self.sde.data.n_obs - 1)
-
 
             if method != 'AGD':
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -133,8 +127,7 @@ class Qmle(SdeLearner):
                         if diag_diff:
                             # if diagonal matrix perform univariate estimation
                             # NB THIS CURRENTLY WORKS ONLY WHEN DIAGONAL TERMS DEPEND ON 1 VARIABLE ONLY AND THERE ARE NO SHARED PARAMETERS
-                            beta_est = np.empty(self.sde.model.npar_di)
-                            it_ = 0
+                            beta_by_name = {}
                             for i in range(self.sde.model.n_var):
                                 diff_i = [[sym.simplify(self.sde.model.A_expr[i,i])]]
                                 sym_i = set([s.name for s in diff_i[0][0].free_symbols])
@@ -152,9 +145,9 @@ class Qmle(SdeLearner):
                                                 data=data_i)
                                     qmle_i = Qmle(sde_i)
                                     qmle_i.fit(start, method=method, hess_exact=hess_exact, **kwargs)
-                                    beta_est[it_] = list(qmle_i.est.values())[0]
-                                    it_ += 1
+                                    beta_by_name.update(qmle_i.est)
                                     res_beta.info[list(qmle_i.est.keys())[0]] = qmle_i.optim_info
+                            beta_est = np.array([beta_by_name[name] for name in self.sde.model.diff_par])
                         else:
                             res_beta = \
                                 optimize.minimize(fun=self.loss_wrap2,
@@ -207,7 +200,10 @@ class Qmle(SdeLearner):
                     # compute and save hessian and vcov, either exact or approx
                     if hess_exact:
                         self.batch_id = np.arange(self.sde.data.n_obs - 1)
-                        self.optim_info["hess"] = self.hessian(self.est)
+                        blocks = [self.hessian(self.est, group=group)
+                                  for group, names in (("alpha", self.sde.model.drift_par),
+                                                       ("beta", self.sde.model.diff_par)) if names]
+                        self.optim_info["hess"] = sp.linalg.block_diag(*blocks)
                     # elif (hasattr(res_alpha, 'hess_inv') or hasattr(res_beta, 'hess_inv')):
                     #     #extract block cov matrix from bfgs or similar if both par blocks are available
                     #     if len(self.sde.model.drift_par) * len(self.sde.model.diff_par) > 0:
@@ -239,16 +235,18 @@ class Qmle(SdeLearner):
                     else:
                         # drift hessian computation
                         if self.sde.model.npar_dr > 0:
-                            gs_alpha = self.gradient2(self.est, group='alpha', ret_sample=True, asy_scale=True)
-                            h_alpha = np.tensordot(gs_alpha, gs_alpha, (0, 0))
+                            gs_alpha = self.gradient2(self.est, group='alpha', ret_sample=True)
+                            h_alpha = n * (gs_alpha.T @ gs_alpha)
                         # diffusion case: separate case for diagonal estimation
                         if self.sde.model.npar_di > 0:
                             if diag_diff:
-                                h_beta = sp.linalg.block_diag(*[v['hess'] for k, v in res_beta.info.items()])
-                                # stop here
+                                local_hess = sp.linalg.block_diag(*[v['hess'] for v in res_beta.info.values()])
+                                local_positions = {name: i for i, name in enumerate(beta_by_name)}
+                                order = [local_positions[name] for name in self.sde.model.diff_par]
+                                h_beta = local_hess[np.ix_(order, order)]
                             else:
-                                gs_beta = self.gradient2(self.est, group='beta', ret_sample=True, asy_scale=True)
-                                h_beta = np.tensordot(gs_beta, gs_beta, (0, 0))
+                                gs_beta = self.gradient2(self.est, group='beta', ret_sample=True)
+                                h_beta = n * (gs_beta.T @ gs_beta)
 
                         #
                         # store results according to groups present
@@ -272,31 +270,25 @@ class Qmle(SdeLearner):
                                             jac=Qmle.grad_wrap, hess=Qmle.hess_wrap, **kwargs)
                     self.est = dict(zip(self.sde.model.param, res.x))
 
-                    if hess_exact:
-                        self.batch_id = np.arange(self.sde.data.n_obs - 1)
-                        self.optim_info["hess"] = self.hessian(self.est)
-                    # else:
-                    #     if isinstance(res.hess_inv, np.ndarray):
-                    #         self.vcov = res.hess_inv / (self.sde.data.n_obs - 1)
-                    #     else:
-                    #         self.vcov = res.hess_inv.todense() / (self.sde.data.n_obs - 1)
-                    #     self.optim_info['hess'] = np.linalg.inv(self.vcov * (self.sde.data.n_obs - 1))
-                    else:
-                        gs = self.gradient(self.est, ret_sample=True, asy_scale=True)
-                        self.optim_info["hess"] = np.tensordot(gs, gs, (0,0))
-
-
                     self.optim_info['res'] = res
                     if self.faulty_par:
-                        warnings.warn('Singular matrix occurred during optimization. Try a different starting point.\n')
+                        warnings.warn('Singular matrix occurred during optimization. Try a different starting point.')
 
-                    # end simultaneous estimation
+            if method == 'AGD' or not two_step:
+                if hess_exact:
+                    self.optim_info["hess"] = self.hessian(self.est)
+                else:
+                    gs = self.gradient(self.est, ret_sample=True)
+                    self.optim_info["hess"] = n * (gs.T @ gs)
 
         # try inverting hessian
         try:
             self.vcov = np.linalg.inv(self.optim_info["hess"])
-            rates = self.rates()
-            self.vcov = rates @ self.vcov @ rates
+            if self.sde.model.mode == "sym":
+                self.vcov /= n
+            else:
+                rates = self.rates()
+                self.vcov = rates @ self.vcov @ rates
         except np.linalg.LinAlgError:
             warnings.warn(
                 'Singular Hessian matrix occurred during optimization. Try a different starting point.\n')
@@ -360,6 +352,7 @@ class Qmle(SdeLearner):
     #     return out
 
     def loss(self, param, batch_id=None, **kwargs):
+        """Return the negative Gaussian quasi-log-likelihood per increment, up to constants."""
         out = 0
         if self.sde.model.mode == 'fun':
             b = self.sde.model.drift
@@ -373,14 +366,13 @@ class Qmle(SdeLearner):
                 A_temp = A(self.X[i], param)
                 S_n[i] = np.matmul(np.array(A_temp), np.array(A_temp).transpose())
 
-            X_res = np.array(self.X[1:] - self.X[:(self.X.shape[0] - 1)] - b_n * self.sde.sampling.delta).reshape(
-                self.X.shape[0] - 1, self.sde.model.n_var, 1)
-            X_res_t = X_res.reshape(self.X.shape[0] - 1, 1, self.sde.model.n_var)
-            log_dets = np.linalg.slogdet(S_n)
-            if np.all(log_dets[0] > 0):
-                out = 0.5 * np.sum(
-                    np.matmul(X_res_t, np.matmul(np.linalg.inv(S_n), X_res)) * 1 / self.sde.sampling.delta +
-                    log_dets[1])
+            signs, log_dets = np.linalg.slogdet(S_n)
+            if np.all(signs > 0):
+                delta = self.sde.sampling.delta
+                residual = self.X[1:] - self.X[:-1] - b_n * delta
+                weighted_residual = np.linalg.solve(S_n, residual[..., None])[..., 0]
+                quadratic = np.sum(residual * weighted_residual, axis=1)
+                out = 0.5 * np.mean(quadratic / delta + log_dets)
             else:
                 out = 1e100
 
@@ -445,18 +437,17 @@ class Qmle(SdeLearner):
     # update the auxiliary matrices
     def update_aux(self, param, batch_id=None):
         # skip if derivatives are already updated with this parameter
-        if param == self.aux_par:
+        indices = np.arange(len(self.DX)) if batch_id is None else np.asarray(batch_id)
+        if param == self.aux_par and self._aux_group == "all" and np.array_equal(indices, self.batch_id):
             if self.faulty_par:
                 raise np.linalg.LinAlgError
             else:
                 return
 
         self.faulty_par = False
+        self._aux_group = "all"
         self.aux_par = param
-        if batch_id is not None:
-            self.batch_id = batch_id
-        else:
-            self.batch_id = np.arange(self.sde.data.n_obs - 1)
+        self.batch_id = indices
 
         self.As = self.sde.model.der_foo["A"](*self.X[self.batch_id].transpose(), **param).transpose((2, 0, 1)).astype('float32')
         self.Ss = np.einsum('ndu, neu-> nde', self.As, self.As)
@@ -490,19 +481,23 @@ class Qmle(SdeLearner):
         """
         # skip if derivatives are already updated with this parameter
 
-        if param == self.aux_par:
+        indices = np.arange(len(self.DX)) if batch_id is None else np.asarray(batch_id)
+        same_batch = np.array_equal(indices, self.batch_id)
+        if (not force_recompute and param == self.aux_par and same_batch
+                and self._aux_group in ("all", group)):
             if self.faulty_par:
                 raise np.linalg.LinAlgError
-            elif not force_recompute:
-                return
+            return
 
+        if group == "alpha" and (not same_batch or self.aux_par is None or self.faulty_par
+                                 or any(param[k] != self.aux_par[k] for k in self.sde.model.diff_par)):
+            self.update_aux2(param, "beta", indices, True)
+
+        self._aux_group = group
         self.aux_par = param
         self.faulty_par = False
 
-        if batch_id is not None:
-            self.batch_id = batch_id
-        else:
-            self.batch_id = np.arange(self.sde.data.n_obs - 1)
+        self.batch_id = indices
 
         # these quantities are required in all cases, but if they have been already computed do not compute again
 
@@ -520,12 +515,6 @@ class Qmle(SdeLearner):
 
         if group == "alpha":
             # required only for drift estimation
-            if self.Ss_inv is None:
-                try:
-                    self.update_aux2(param, 'beta', batch_id, True)
-                except np.linalg.LinAlgError:
-                    pass
-
             self.bs = np.swapaxes(self.sde.model.der_foo["b"](*self.X[self.batch_id].transpose(), **param), 0, -1)
             self.DXS_inv = np.matmul(self.DX[self.batch_id] - self.sde.sampling.delta * self.bs, self.Ss_inv)
 
@@ -559,16 +548,17 @@ class Qmle(SdeLearner):
         if self.sde.model.npar_dr > 0:
             # Jbs = np.array([self.model.der_foo["Jb"](*x, **param) for x in self.X[:-1]])
             # split computation for large models, (low memory mode)
-            grad_alpha = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_dr))
+            grad_alpha = np.empty((len(self.batch_id), self.sde.model.npar_dr))
             if self.low_mem:
                 for i in range(0, len(self.batch_id), 1000):
-                    batch_indices = self.batch_id[i:i + 1000]
+                    rows = slice(i, i + 1000)
+                    batch_indices = self.batch_id[rows]
                     Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[batch_indices].transpose(), **param), -1, 0)
-                    grad_alpha[batch_indices] = -2 * np.matmul(self.DXS_inv[batch_indices], Jbs)[:, 0, :]
+                    grad_alpha[rows] = -2 * np.matmul(self.DXS_inv[rows], Jbs)[:, 0, :]
             else:
                 batch_indices = self.batch_id
                 Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[batch_indices].transpose(), **param), -1, 0)
-                grad_alpha[batch_indices] = -2 * np.matmul(self.DXS_inv[batch_indices], Jbs)[:, 0, :]
+                grad_alpha[:] = -2 * np.matmul(self.DXS_inv, Jbs)[:, 0, :]
 
             if asy_scale:
                 grad_alpha /= np.sqrt(len(self.batch_id) * self.sde.sampling.delta)
@@ -577,41 +567,42 @@ class Qmle(SdeLearner):
 
         if self.sde.model.npar_di > 0 :
             # split computation, in low memory mode. Possibly parallel?
-            grad_beta = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_di))
+            grad_beta = np.empty((len(self.batch_id), self.sde.model.npar_di))
             #DAs = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_di, self.sde.model.n_var, self.sde.model.n_noise))
             if self.low_mem:
                 for i in range(0, len(self.batch_id), 1000):
-                    batch_indices = self.batch_id[i:i + 1000]
+                    rows = slice(i, i + 1000)
+                    batch_indices = self.batch_id[rows]
                     DAs = np.moveaxis(self.sde.model.der_foo["DA"](*self.X[batch_indices].transpose(), **param), -1, 0)
 
-                    CSs = np.einsum('npdu, neu -> npde', DAs, self.As[batch_indices])
+                    CSs = np.einsum('npdu, neu -> npde', DAs, self.As[rows])
                     DSs = CSs + CSs.transpose((0, 1, 3, 2))
 
-                    GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[batch_indices], DSs)
+                    GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[rows], DSs)
                     grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
-                    GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[batch_indices])
+                    GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[rows])
                     grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
-                                                 np.einsum('nd, npde -> npe', (self.DX[batch_indices] - dn * self.bs[batch_indices])[:, 0, :],
+                                                 np.einsum('nd, npde -> npe', (self.DX[batch_indices] - dn * self.bs[rows])[:, 0, :],
                                                            GB2a),
-                                                 (self.DX[batch_indices] - dn * self.bs[batch_indices])[:, 0, :])
-                    grad_beta[batch_indices] = grad_beta1 + grad_beta2
+                                                 (self.DX[batch_indices] - dn * self.bs[rows])[:, 0, :])
+                    grad_beta[rows] = grad_beta1 + grad_beta2
             else:
                 batch_indices = self.batch_id
                 DAs = np.moveaxis(self.sde.model.der_foo["DA"](*self.X[batch_indices].transpose(), **param), -1, 0)
 
-                CSs = np.einsum('npdu, neu -> npde', DAs, self.As[batch_indices])
+                CSs = np.einsum('npdu, neu -> npde', DAs, self.As)
                 DSs = CSs + CSs.transpose((0, 1, 3, 2))
 
-                GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[batch_indices], DSs)
+                GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
                 grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
-                GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[batch_indices])
+                GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
                 grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
                                                  np.einsum('nd, npde -> npe',
-                                                           (self.DX[batch_indices] - dn * self.bs[batch_indices])[:,
+                                                           (self.DX[batch_indices] - dn * self.bs)[:,
                                                            0, :],
                                                            GB2a),
-                                                 (self.DX[batch_indices] - dn * self.bs[batch_indices])[:, 0, :])
-                grad_beta[batch_indices] = grad_beta1 + grad_beta2
+                                                 (self.DX[batch_indices] - dn * self.bs)[:, 0, :])
+                grad_beta[:] = grad_beta1 + grad_beta2
 
             if asy_scale:
                 grad_beta /= np.sqrt(len(self.batch_id))
@@ -665,16 +656,17 @@ class Qmle(SdeLearner):
                 return 10 * np.random.randn(len(self.sde.model.drift_par))
 
             # low memory computation for large models, avoids ram issues
-            grad_alpha = np.empty((self.sde.data.n_obs-1, self.sde.model.npar_dr))
+            grad_alpha = np.empty((len(self.batch_id), self.sde.model.npar_dr))
             if self.low_mem:
                 for i in range(0, len(self.batch_id), 1000):
-                    batch_indices = self.batch_id[i:i + 1000]
+                    rows = slice(i, i + 1000)
+                    batch_indices = self.batch_id[rows]
                     Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[batch_indices].transpose(), **param), -1, 0)
-                    grad_alpha[batch_indices] = -2 * np.matmul(self.DXS_inv[batch_indices], Jbs)[:, 0, :]
+                    grad_alpha[rows] = -2 * np.matmul(self.DXS_inv[rows], Jbs)[:, 0, :]
             else:
                 batch_indices = self.batch_id
                 Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[batch_indices].transpose(), **param), -1, 0)
-                grad_alpha[batch_indices] = -2 * np.matmul(self.DXS_inv[batch_indices], Jbs)[:, 0, :]
+                grad_alpha[:] = -2 * np.matmul(self.DXS_inv, Jbs)[:, 0, :]
 
             if asy_scale:
                 grad_alpha /= np.sqrt(len(self.batch_id) * self.sde.sampling.delta)
@@ -694,34 +686,35 @@ class Qmle(SdeLearner):
                 return 10 * np.random.randn(len(self.sde.model.diff_par))
 
             # DSs = np.moveaxis(self.sde.model.der_foo["DS"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-            grad_beta = np.empty((self.sde.data.n_obs - 1, self.sde.model.npar_di))
+            grad_beta = np.empty((len(self.batch_id), self.sde.model.npar_di))
             if self.low_mem:
                 for i in range(0, len(self.batch_id), 1000):
-                    batch_indices = self.batch_id[i:i + 1000]
+                    rows = slice(i, i + 1000)
+                    batch_indices = self.batch_id[rows]
                     DAs = np.moveaxis(
                         self.sde.model.der_foo["DA"](*self.X[batch_indices].transpose(), **param), -1, 0)
-                    CSs = np.einsum('npdu, neu -> npde', DAs, self.As[batch_indices])
+                    CSs = np.einsum('npdu, neu -> npde', DAs, self.As[rows])
                     DSs = CSs + CSs.transpose((0, 1, 3, 2))
-                    GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[batch_indices], DSs)
+                    GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[rows], DSs)
                     grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
-                    GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[batch_indices])
+                    GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[rows])
                     grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
                                                      np.einsum('nd, npde -> npe', (self.DX[batch_indices])[:, 0, :], GB2a),
                                                      (self.DX[batch_indices])[:, 0, :])
-                    grad_beta[batch_indices] = grad_beta1 + grad_beta2
+                    grad_beta[rows] = grad_beta1 + grad_beta2
             else:
                 batch_indices = self.batch_id
                 DAs = np.moveaxis(
                     self.sde.model.der_foo["DA"](*self.X[batch_indices].transpose(), **param), -1, 0)
-                CSs = np.einsum('npdu, neu -> npde', DAs, self.As[batch_indices])
+                CSs = np.einsum('npdu, neu -> npde', DAs, self.As)
                 DSs = CSs + CSs.transpose((0, 1, 3, 2))
-                GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv[batch_indices], DSs)
+                GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
                 grad_beta1 = np.trace(GB1, axis1=2, axis2=3)
-                GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv[batch_indices])
+                GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
                 grad_beta2 = -1 / dn * np.einsum('npd, nd -> np',
                                                  np.einsum('nd, npde -> npe', (self.DX[batch_indices])[:, 0, :], GB2a),
                                                  (self.DX[batch_indices])[:, 0, :])
-                grad_beta[batch_indices] = grad_beta1 + grad_beta2
+                grad_beta[:] = grad_beta1 + grad_beta2
 
             if asy_scale:
                 grad_beta /= np.sqrt(len(self.batch_id))
@@ -755,82 +748,82 @@ class Qmle(SdeLearner):
 
 
     # compute the hessian of the quasi-lik at point par for a given sde object
-    def hessian(self, param, batch_id=None, **kwargs):
+    def hessian(self, param, batch_id=None, group="all", **kwargs):
+        """Exact Hessian of the mean symbolic quasi-loss on the selected increments.
 
-        assert self.sde.model.mode == 'sym', 'Hessian computation available only in symbolic mode'
+        "all" uses drift-adjusted residuals and includes mixed derivatives.
+        "alpha" and "beta" differentiate the corresponding two-step objectives.
+        The beta step uses raw increments. Rows and columns follow model parameter
+        order within the selected group. An empty group returns a (0, 0) matrix.
+        Requires model option hess=True for the requested second derivatives.
+        """
+        assert self.sde.model.mode == "sym", "Hessian computation available only in symbolic mode"
+        if group not in ("all", "alpha", "beta"):
+            raise ValueError("group must be 'all', 'alpha' or 'beta'")
+        model = self.sde.model
+        drift = group != "beta" and model.npar_dr > 0
+        diffusion = group != "alpha" and model.npar_di > 0
+        size = (model.npar_dr if drift else 0) + (model.npar_di if diffusion else 0)
+        if size == 0:
+            return np.empty((0, 0))
 
+        indices = np.arange(len(self.DX)) if batch_id is None else np.asarray(batch_id)
         try:
-            self.update_aux(param, batch_id)
+            if group == "beta":
+                self.update_aux2(param, "beta", indices)
+            else:
+                self.update_aux(param, indices)
         except np.linalg.LinAlgError:
-            return np.diag(np.full(shape=len(self.sde.model.param), fill_value=np.finfo(float).resolution))
+            return np.eye(size) * np.finfo(float).resolution
 
-        dn = self.sde.sampling.delta
+        def derivative(name):
+            values = model.der_foo[name](*self.X[indices].T, **param)
+            return np.moveaxis(values, -1, 0)
 
-        Jbs = np.moveaxis(self.sde.model.der_foo["Jb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        # DSs = np.array([self.model.der_foo["DS"](*x, **param) for x in self.X[:-1]])
-        # DSs = np.moveaxis(self.sde.model.der_foo["DS"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        DAs = np.moveaxis(self.sde.model.der_foo["DA"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        CSs = np.einsum('npdu, neu -> npde', DAs, self.As)
-        DSs = CSs + CSs.transpose((0, 1, 3, 2))
+        dt = self.sde.sampling.delta
+        precision = self.Ss_inv
+        if group == "beta":
+            weighted_residual = (self.DX[indices] @ precision)[:, 0, :]
+        else:
+            weighted_residual = self.DXS_inv[:, 0, :]
 
+        if drift:
+            Jb = derivative("Jb")
+            weighted_Jb = precision @ Jb
+            alpha = dt * np.einsum("nia,nib->ab", Jb, weighted_Jb)
+            alpha -= np.einsum("ni,niab->ab", weighted_residual, derivative("Hb"))
+            alpha /= len(indices)
+            if not diffusion:
+                return alpha
 
-        # Hbs = np.array([self.model.der_foo["Hb"](*x, **param) for x in self.X[:-1]])
-        # HSs = np.array([self.model.der_foo["HS"](*x, **param) for x in self.X[:-1]])
-        Hbs = np.moveaxis(self.sde.model.der_foo["Hb"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        #HSs = np.moveaxis(self.sde.model.der_foo["HS"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        HAs = np.moveaxis(self.sde.model.der_foo["HA"](*self.X[self.batch_id].transpose(), **param), -1, 0)
-        E1s = np.einsum('npqdu, neu -> npqde', HAs, self.As)
-        E2s = np.einsum('npdu, nqeu -> npqde', DAs, DAs)
-        HSs = E1s + E2s + E1s.transpose((0,1,2,4,3)) + E2s.transpose((0,1,2,4,3))
+        DA = derivative("DA")
+        product = DA @ self.As[:, None].swapaxes(-1, -2)
+        DS = product + product.swapaxes(-1, -2)
+        second = derivative("HA") @ self.As[:, None, None].swapaxes(-1, -2)
+        second += np.einsum("npik,nqjk->npqij", DA, DA)
+        HS = second + second.swapaxes(-1, -2)
 
+        # Second derivatives of log(det(S)) and of the residual quadratic form.
+        weighted_DS = precision[:, None] @ DS
+        beta = np.einsum("nij,npqji->pq", precision, HS)
+        beta -= np.einsum("npij,nqji->pq", weighted_DS, weighted_DS)
+        v = np.einsum("npij,nj->npi", DS, weighted_residual)
+        quadratic = 2 * np.einsum("npi,nij,nqj->pq", v, precision, v, optimize=True)
+        quadratic -= np.einsum("ni,npqij,nj->pq", weighted_residual, HS, weighted_residual)
+        beta = (beta + quadratic / dt) / (2 * len(indices))
+        if not drift:
+            return beta
 
-        if len(self.sde.model.drift_par) > 0:
-            HESSA1 = np.einsum('nd, ndpq -> npq', self.DXS_inv[:, 0, :], Hbs)
-            HESSA2 = np.einsum('npd, ndq -> npq', Jbs.transpose((0, 2, 1)), np.einsum('nde, nep -> ndp', self.Ss_inv, Jbs))
-            hess_alpha = np.sum(-2 * HESSA1 + 2 * dn * HESSA2, axis=0)
-
-
-        if len(self.sde.model.diff_par) > 0:
-            GB1 = np.einsum('nde, npef -> npdf', self.Ss_inv, DSs)
-            GB2a = np.einsum('npde, nef -> npdf', GB1, self.Ss_inv)
-
-            HESSO1 = np.einsum('npde, nqef -> npqdf', GB1, GB1)
-            HESS02 = np.einsum('nde, npqef -> npqdf', self.Ss_inv, HSs)
-
-            HESSB1 = np.trace(HESSO1, axis1=3, axis2=4)
-            HESSB2 = np.trace(HESS02, axis1=3, axis2=4)
-
-            #HESSB3a = np.einsum('npde, nef, nqfg -> npqdg', DSs, self.Ss_inv, DSs)
-            HESSB3a = np.einsum('npqde, nef -> npqdf', HESSO1, self.Ss_inv)
-            HESSB3b = np.einsum('npqde, nef -> npqdf', HESS02, self.Ss_inv)
-            #HESSB3c = np.einsum('nde, npqef, nfg -> npqdg', self.Ss_inv, HESSB3a - HSs + HESSB3a.transpose((0, 2, 1, 3, 4)), self.Ss_inv)
-            HESSB3c = HESSB3a + HESSB3b + HESSB3a.transpose((0, 2, 1, 3, 4))
-            HESSB3 = np.einsum('nd, npqde, ne -> npq', self.DXS_inv[:, 0, :], HESSB3c, self.DXS_inv[:, 0, :])
-
-            hess_beta = - HESSB1 + HESSB2 + (1/dn) * HESSB3
-            # make sure result is symmetric
-            #hess_beta = np.sum(0.5 * (hess_beta + hess_beta.transpose((0, 2, 1))), axis=0)
-            hess_beta = np.sum(hess_beta , axis=0)
-
-        if len(self.sde.model.diff_par) * len(self.sde.model.drift_par)> 0:
-            hess_ab = -2 * np.sum(
-                np.einsum('nd, npde, neq -> npq', (self.DX[self.batch_id] - dn * self.bs)[:, 0, :], GB2a, Jbs), axis=0)
-
-        if len(self.sde.model.diff_par) * len(self.sde.model.drift_par)> 0:
-           hess = 0.5 * np.block([[hess_alpha, hess_ab.transpose()], [hess_ab, hess_beta]]) * 1 / len(self.batch_id)
-
-        if len(self.sde.model.diff_par) == 0:
-            hess = hess_alpha
-        if len(self.sde.model.drift_par) == 0:
-            hess = hess_beta
-
-        return hess
-
+        mixed = np.einsum("nia,npi->ap", weighted_Jb, v) / len(indices)
+        return np.block([[alpha, mixed], [mixed.T, beta]])
 
     def check_diag_est(self):
 
-        S_sim = np.array(sym.simplify(self.sde.model.S_expr))
-        is_diagonal = np.all(S_sim == np.diag(np.diagonal(S_sim)))
+        A = self.sde.model.A_expr
+        if A.shape[0] != A.shape[1]:
+            return False
+        is_diagonal = all(sym.simplify(A[i, j]) == 0
+                          for i in range(A.shape[0]) for j in range(A.shape[1]) if i != j)
         if is_diagonal:
             from collections import defaultdict
             # d maps every parameter to the equations it appears in

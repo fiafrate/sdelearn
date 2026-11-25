@@ -111,7 +111,7 @@ lasso = AdaLasso(sde, qmle, delta=1, start=startp)
 lasso.lambda_max
 lasso.penalty
 lasso.fit()
-# by default no lambda value is chosen and the full path of estimates is computed
+# The default fit selects lambda_min by the AIC-style score and retains the full path.
 lasso.est_path
 lasso.plot()
 
