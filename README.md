@@ -26,6 +26,28 @@ We observe $X$ at $n+1$ equidistant times $t_0,\ldots,t_n$, including the starti
 * `SdeSampling(initial, terminal, n=...)` takes the number of observation times as its `n` argument. With the notation above, `sampling.n` is $n+1$. Alternatively, supply `delta` for the time step. The last grid point is then the largest admissible time up to `terminal`.
 * `SdeData` holds one observation per row and one state variable per column. Supply observed data to `sde.set_data(data)`, or use `sde.simulate(param, x0)` to generate a trajectory by the Euler scheme. The model and sampling scheme can also be specified before the data are available.
 
+## Learning model parameters using a `SdeLearner`
+
+An `Sde` describes the stochastic differential equation, the observation times and the trajectory. A learner specifies how to estimate the parameters from those observations. Several learners can therefore be fitted to the same `Sde`. Each keeps its own estimates, so their fits and predictions can be compared on the same trajectory.
+
+All estimators provided by SDElearn derive from `SdeLearner` and share the following methods and fields.
+
+**Learner methods**
+
+- `loss` evaluates the estimation criterion at the supplied parameter values.
+- `fit` estimates the model parameters and stores the results on the learner.
+- `predict` simulates trajectories under the fitted parameters to estimate the mean trajectory on a chosen time grid.
+- `gradient` and `hessian` evaluate derivatives when the estimation procedure provides them. Symbolic `Qmle`, for example, provides both for the quasi-likelihood loss.
+
+**Learner fields**
+
+- `sde` holds the model, sampling scheme and trajectory used for estimation.
+- `est` is the dictionary of fitted coefficients, keyed by parameter name.
+- `vcov` holds the covariance matrix when available. Regularized estimators inherit it from the base learner.
+- `optim_info` records information about the fit, such as the optimizer result and the fitted Hessian when available.
+
+The regularized estimators `AdaLasso`, `AdaElasticNet` and `AdaBridge` each require an explicitly chosen base learner. For example, passing a fitted `Qmle` to `AdaLasso` supplies the initial estimate and Hessian for a quadratic approximation to the quasi-likelihood loss. With direct penalization, the base learner supplies the loss itself. An unfitted base learner is fitted automatically when the chosen procedure needs an initial estimate.
+
 ### Example: simulation and estimation
 
 Consider a mean-reverting diffusion with drift $a-bx$ and unit diffusion coefficient. The following example is used throughout the guide.
