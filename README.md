@@ -120,7 +120,7 @@ $$
 \begin{aligned}
 g_{i,\alpha} &= -J_i^\top S_i^{-1}r_i,\\
 g_{i,\beta_j} &= \frac{1}{2}\left[
-\operatorname{tr}(S_i^{-1}D_{ij}) - \frac{r_i^\top S_i^{-1}D_{ij}S_i^{-1}r_i}{h}\right].
+\mathrm{tr}(S_i^{-1}D_{ij}) - \frac{r_i^\top S_i^{-1}D_{ij}S_i^{-1}r_i}{h}\right].
 \end{aligned}
 $$
 
@@ -219,42 +219,24 @@ Lasso and Elastic Net traverse the grid from largest to smallest. Adaptive Bridg
 
 ### Numerical methods
 
-At a current or extrapolated point $y$, a proximal update takes $u=y-s\nabla f(y)$ and minimizes $\tfrac{1}{2}\|z-u\|^2+s\lambda P(z)$ on the active coordinates. With $t=s\lambda$ and $[v]_+=\max(v,0)$ the Lasso and Elastic Net updates are
+At each penalty value, the solver takes a gradient step for the smooth loss and then applies the thresholding rule for the chosen penalty. The solution initializes the fit at the next point on the grid. For Bridge, the objective is nonconvex, so the forward and backward paths can yield different estimates at the same penalty.[^pathwise]
 
-$$
-\begin{aligned}
-z_j^{\mathrm{Lasso}} &= \operatorname{sign}(u_j)
-  \bigl[\lvert u_j\rvert-tw_j\bigr]_+,\\
-z_j^{\mathrm{EN}} &= \frac{\operatorname{sign}(u_j)
-  \bigl[\lvert u_j\rvert-t\eta w_j\bigr]_+}{1+t(1-\eta)}.
-\end{aligned}
-$$
+Use `opt_alg` in `fit(...)` to choose how the coefficients are updated.
 
-For Bridge let $v=|u_j|$ and $c=tw_j$. The half-power update is zero for $v\le\tfrac{3}{2} c^{2/3}$. Above this threshold it is
-
-$$
-z_j=\frac{2u_j}{3}\left[1+
-\cos\left(\frac{2}{3}\arccos\left(-\frac{c}{4}(v/3)^{-3/2}\right)\right)\right].
-$$
-
-| `opt_alg` | Update along the path |
+| `opt_alg` | Method |
 | --- | --- |
-| `"fista"` | Default for Lasso and Elastic Net. Extrapolates the previous two iterates with the Nesterov sequence and applies soft thresholding. |
-| `"mAPG"` | Default for Bridge. Compares thresholded candidates from the extrapolated and current points using $F_\lambda$ at the current penalty. |
-| `"cyclic"` | All three learners. Starts a sweep at the largest signed smooth-gradient component, cycles through the coordinates, and checks displacement after a complete sweep. |
-| `"block_wise"` | All three learners. Updates successive parameter groups in model order and checks displacement over a sweep. Requires multiple groups. |
+| `"fista"` | Default for Lasso and Elastic Net. Extrapolates from the two most recent iterates before updating all coefficients together. |
+| `"mAPG"` | Default for Bridge. Takes a step from both the current and the extrapolated iterate and retains the candidate with the smaller penalized loss. |
+| `"cyclic"` | Updates one coefficient at a time, cycling through all coordinates. Available for all three estimators. |
+| `"block_wise"` | Updates one parameter group at a time, cycling through the groups defined by the model. Available for all three estimators when the model has multiple groups. |
 
-For FISTA, starting with $t_0=1$, the extrapolation uses $t_{k+1}=(1+\sqrt{1+4t_k^2})/2$ and $y=x_k+[(t_k-1)/t_{k+1}](x_k-x_{k-1})$. Bridge mAPG compares the extrapolated candidate and a proximal update from $x_k$, then keeps the candidate with the smaller penalized objective. The Bridge criterion is nonconvex, so path direction and initialization can affect the fitted coefficients at the same $\lambda$.[^pathwise]
-
-With initial curvature, the full-vector step is $0.9/L$ and the block step is $0.9/\lambda_{\max}(H_{BB})$ for active block $B$. The coordinate step is $1/H_{jj}$ for Lasso and Elastic Net. Bridge uses this step for the first coordinate and $0.9/H_{jj}$ on subsequent updates. With `backtracking=True`, the line search checks the smooth-loss bound
-
-$$
-f(z)\le f(y)+(z-y)^\top\nabla f(y)+\frac{\|z-y\|^2}{2s}.
-$$
-
-Only active coordinates move in a coordinate or block trial. The initial trial uses `s_ini` (default 10) and failed trials reduce the step by a factor of 0.8. The implementation returns the final trial after 50 attempts. Backtracking is the default in the absence of initial curvature. Explicit `backtracking=False` then uses `s_ini` as a fixed step.
-
-The stopping tolerance `epsilon` applies to the Euclidean displacement (defaults $10^{-6}$ for Lasso and $10^{-3}$ for Bridge and Elastic Net). `max_it` defaults to 1,000 updates per penalty. Optional box bounds are supplied as a numerical array with one lower/upper pair per parameter. A violating coordinate is moved inside by `epsilon`, so choose a tolerance compatible with the width of the interval.
+| Argument to `fit(...)` | Effect |
+| --- | --- |
+| `backtracking` | `True` enables a line search that shortens the step when the smooth loss exceeds its local quadratic bound. `False` disables the search. The default (`None`) uses the initial Hessian to set the step when available and enables backtracking otherwise. |
+| `s_ini` | Initial trial step for backtracking (default 10). Also sets the fixed step when backtracking is disabled and no initial Hessian is available. |
+| `epsilon` | Stopping tolerance for the change in the coefficient vector, assessed after a full sweep for coordinate and block updates. Defaults to $10^{-6}$ for Lasso and $10^{-3}$ for Bridge and Elastic Net. |
+| `max_it` | Maximum number of updates at each penalty value (default 1,000). |
+| `bounds` | Optional array with one lower and upper bound per coefficient, in model parameter order. The default is unconstrained. |
 
 ### Selecting an estimate from the path
 
